@@ -104,6 +104,9 @@ for f in $workingdata/CF3/trimmed_RNA_reads/*_R1_001.se.fq; do
   gzip $workingdata/CF3/fastq_data/$dir/$newf
 done
 
+## remove prep data to save sapace
+rm -rf $workingdata/CF3/prep
+
 ## get new data (50 samples)
 ## On Zoey
 mkdir /zoey/work/dog/newSeq
@@ -176,6 +179,9 @@ for f in */*_R[1-2]_*.fastq; do
   fileName=$samplePath/$(basename $f);
   seqret fastq-illumina::$f fastq::$fileName; done
 for f in $workingdata/newSeq/fastq_data/*/*.fastq;do qsub -v f=$f $script_path/gzipFiles.sh;done
+# remove fastq_data_oldEncod to save space 
+cd ../
+rm -rf $workingdata/newSeq/fastq_data_oldEncod 
 
 ## Adapter trimming
 ## Mild trimming with Trimmomatic using sliding window
@@ -186,6 +192,9 @@ while read work_dir; do
   sample_list=$work_dir/fastq_data/sample_list.txt
   bash ${script_path}/run_adapter_trimmer.sh $sample_list "PE" $script_path
 done < $dogSeq/working_list_newSeq2.txt
+
+## delete the raw Fastq files to save space
+rm $workingdata/*/fastq_data/*/*.fastq.gz
 
 ## get the referenece genome
 cd $genome_dir
@@ -279,7 +288,6 @@ wc -l combine_union.vcf
 
 knownSNPs="$genome_dir/knowVar/combine_union.vcf"
 
-
 ## define replicates
 while read work_dir; do
   for d in $work_dir/fastq_data/*;do if [ -d $d ];then
@@ -342,6 +350,8 @@ while read f;do
   cd ../
 done < sort_merge.temp.redo2
 
+## remove unnecessary files to save space 
+rm $workingdata/*/bwa_align/*/{*.sam,pe_aligned_reads.bam,se_aligned_reads.bam} 
 
 ## merge replicates
 while read work_dir; do
@@ -471,7 +481,6 @@ done < $dogSeq/working_list_hod.txt > $dogSeq/sampleCoverage_hod
 done < $dogSeq/working_list_CF3.txt > $dogSeq/sampleCoverage_CF3
 done < $dogSeq/working_list_newSeq2.txt > $dogSeq/sampleCoverage_newSeq2
 done < $dogSeq/working_list_newSeq.txt > $dogSeq/sampleCoverage_newSeq
-
 ###########################
 ## variant calling by sample
 while read work_dir; do
@@ -639,19 +648,33 @@ DP_threshold=$(echo "$ave+(5*$std)" | bc)  ## 3105.196
 #cat SNP.AC | awk '$2~","' > SNP.AC.multi.entries
 #paste SNP.AC.multi SNP.AC.multi.entries > temp
 
+##########################
+## variant filtration: hard filtering
 ## Best practice
 ## SNP
 ##--filterExpression "QD < 2.0 || MQ < 40.0 || MQRankSum < -12.5 || FS > 60.0 || SOR > 4.0 || ReadPosRankSum < -8.0"
 ## INDEL
 ##--filterExpression "QD < 2.0 || FS > 200.0 || ReadPosRankSum < -20.0"
-
-## run hard filtering
 ## http://gatkforums.broadinstitute.org/gatk/discussion/2806/howto-apply-hard-filters-to-a-call-set
 ## https://www.broadinstitute.org/gatk/guide/article?id=3225
-
+#https://software.broadinstitute.org/gatk/guide/article?id=6925
+#http://gatkforums.broadinstitute.org/gatk/discussion/2806/howto-apply-hard-filters-to-a-call-set
+#http://gatkforums.broadinstitute.org/gatk/discussion/7285/code-for-hard-filtering-and-qc-statistics
+cd $varResults
 bash ${script_path}/run_snpVariantFiltration.sh "$gatk_ref" "GenotypeGVCFs_output_max50.raw_SNPs.vcf" "$script_path/snpVariantFiltration.sh"
-bash ${script_path}/run_indelVariantFiltration.sh "$gatk_ref" "GenotypeGVCFs_output_max50.raw_INDELs.vcf" "$script_path/indelVariantFiltration.sh"
+grep "^#" GenotypeGVCFs_output_max50.filtered_snps.vcf > GenotypeGVCFs_output_max50.pass_snps.vcf
+grep "PASS" GenotypeGVCFs_output_max50.filtered_snps.vcf >> GenotypeGVCFs_output_max50.pass_snps.vcf ## It filters 1,388,327 out of 15,353,085 (I noticed all chrM snps were filtered)
+grep -v "PASS" GenotypeGVCFs_output_max50.filtered_snps.vcf > GenotypeGVCFs_output_max50.failed_snps.vcf
+grep -v "^#" GenotypeGVCFs_output_max50.failed_snps.vcf | awk '{A[$7]++}END{for(i in A)print i,A[i]}' | sort -k2,2nr > failed_snps.categories
+#bash ${script_path}/run_snpVariantRecalibrator.sh "GenotypeGVCFs_output_max50.vcf" "GenotypeGVCFs_output_max50.pass_snps.vcf" "$knownSNPs1" "$gatk_ref" "$script_path/snpVariantRecalibrator.sh"
 
+bash ${script_path}/run_indelVariantFiltration.sh "$gatk_ref" "GenotypeGVCFs_output_max50.raw_INDELs.vcf" "$script_path/indelVariantFiltration.sh"
+grep "^#" GenotypeGVCFs_output_max50.filtered_indels.vcf > GenotypeGVCFs_output_max50.pass_indels.vcf
+grep "PASS" GenotypeGVCFs_output_max50.filtered_indels.vcf >> GenotypeGVCFs_output_max50.pass_indels.vcf ## It filters 77,867 out of 8436580
+grep -v "PASS" GenotypeGVCFs_output_max50.filtered_indels.vcf > GenotypeGVCFs_output_max50.failed_indels.vcf 
+grep -v "^#" GenotypeGVCFs_output_max50.failed_indels.vcf | awk '{A[$7]++}END{for(i in A)print i,A[i]}' | sort -k2,2nr > failed_indels.categories
+#bash ${script_path}/run_indelVariantRecalibrator.sh "GenotypeGVCFs_output_max50.vcf" "GenotypeGVCFs_output_max50.pass_indels.vcf" "$knownSNPs1" "$gatk_ref" "$script_path/indelVariantRecalibrator.sh"
+#########################
 ## combine SNPs and INDELs
 bash ${script_path}/run_combineVariants.sh "$gatk_ref" "GenotypeGVCFs_output_max50.filtered_snps.vcf" "GenotypeGVCFs_output_max50.filtered_indels.vcf" "$script_path/combineVariants.sh"
 
@@ -659,33 +682,24 @@ bash ${script_path}/run_combineVariants.sh "$gatk_ref" "GenotypeGVCFs_output_max
 sample_list="$dogSeq/all_g.vcfs.txt"
 target_bam="dedup_reads.bam"
 bash ${script_path}/run_readBackedPhasing_multi.sh "$gatk_ref" "$sample_list" "$target_bam" "GenotypeGVCFs_output_max50.combinedFiltered.vcf" "$script_path/readBackedPhasing_multi.sh"
-
 ##########################
-## variant filtration
-cd $varResults
-## run hard filtering
-bash ${script_path}/run_snpVariantFiltration.sh "$gatk_ref" "GenotypeGVCFs_output_max50.raw_SNPs.vcf" "$script_path/snpVariantFiltration.sh"
-grep -v "snpFilter" GenotypeGVCFs_output_max50.raw_snps.filtered_snps.vcf > passSNP.vcf
-bash ${script_path}/run_snpVariantRecalibrator.sh "GenotypeGVCFs_output_max50.vcf" "passSNP.vcf" "$knownSNPs1" "$gatk_ref" "$script_path/snpVariantRecalibrator.sh"
-
-bash ${script_path}/run_indelVariantFiltration.sh "$gatk_ref" "GenotypeGVCFs_output_max50.raw_INDELs.vcf" "$script_path/indelVariantFiltration.sh"
-grep -v "indelFilter" GenotypeGVCFs_output_max50.raw_INDELs.filtered_indels.vcf > passINDEL.vcf
-bash ${script_path}/run_indelVariantRecalibrator.sh "GenotypeGVCFs_output_max50.vcf" "passSNP.vcf" "$knownSNPs1" "$gatk_ref" "$script_path/indelVariantRecalibrator.sh"
-########
-bash $script_path/variantFiltration.sh "$gatk_ref" "HC_output_ploidy1_haplo1.vcf"
-#########################
 ## varaiant annotation
 #module load annovar/20140409
 #annotate_variation.pl -buildver canFam3 --downdb --webfrom ucsc refGene dogdb/ ## failed
 
 ## http://www.ensembl.org/info/docs/tools/vep/script/vep_tutorial.html
-cd $varResults
-module load VEP/81
+#module load VEP/85
+wget https://github.com/Ensembl/ensembl-tools/archive/release/85.zip
+gunzip 85.gz
+cd ~/ensembl-tools-release-85/scripts/variant_effect_predictor/
+perl INSTALL.pl
 ## install local cache using VEP-INSTALL.pl (http://www.ensembl.org/info/docs/tools/vep/script/vep_cache.html#offline)
+## for API installation say "Yes". but you can skip to download cache only
 ## for cache files choose 12 : a merged file of RefSeq and Ensembl transcripts. Remember to use --merged when running the VEP with this cache
 ## for FASTA files choose 9: Canis_familiaris.CanFam3.1.dna.toplevel.fa.gz. The FASTA file should be automatically detected by the VEP when using --cache or --offline. If it is not, use "--fasta /mnt/home/mansourt/.vep/canis_familiaris/81_CanFam3.1/Canis_familiaris.CanFam3.1.dna.toplevel.fa"
 ## for plugins choose 0 for all
 #variant_effect_predictor.pl -i GenotypeGVCFs_output_max50.raw_SNPs.vcf --cache --offline -species canis_familiaris --merged
+cd $varResults
 qsub -v vcf="GenotypeGVCFs_output_max50.raw_SNPs.vcf" ${script_path}/vep.sh
 mkdir snp_varEffect
 mv variant_effect_output.txt* snp_varEffect/.
@@ -695,56 +709,62 @@ mkdir indel_varEffect
 mv variant_effect_output.txt* indel_varEffect/.
 ##########################
 ## breed specific varaints:
+snps="GenotypeGVCFs_output_max50.pass_snps"  ## "GenotypeGVCFs_output_max50.raw_SNPs"
+snpEff=$varResults/snp_varEffect/variant_effect_output.txt
+mkdir breedSp && cd breedSp
 ## remove chrUn from VCF ## do you want to filter the low quality SNPs?
-grep -v "^chrUn_" GenotypeGVCFs_output_max50.raw_SNPs.vcf > GenotypeGVCFs_output_max50.raw_SNPs.NochrUn.vcf
-
+grep -v "^chrUn_" ../$snps.vcf > $snps.NochrUn.vcf
+## remove hashed lines and fix the header to be readable
+grep -v "^##" $snpEff | sed 's/#Uploaded_variation/Uploaded_variation/' > snp_varEffect.txt 
 ## prepare Plink input
 module load vcftools/0.1.14
-vcftools --vcf GenotypeGVCFs_output_max50.raw_SNPs.NochrUn.vcf --plink --out GenotypeGVCFs_output_max50.raw_SNPs.NochrUn
+vcftools --vcf $snps.NochrUn.vcf --plink --out $snps.NochrUn
 #awk '{print $1,$2,1}' GenotypeGVCFs_output_max50.raw_SNPs.ped > GenotypeGVCFs_output_max50.raw_SNPs.phe_blank
 #awk '{ if ( $1 == "CWA562" || $1 == "T493" ) { $3 = 2 }; print}' GenotypeGVCFs_output_max50.raw_SNPs.phe_blank > GenotypeGVCFs_output_max50.raw_SNPs.phe
-
-## run plink association and model analysis
+## create binary inputs
 module load plink/1.9
-plink --file GenotypeGVCFs_output_max50.raw_SNPs.NochrUn --allow-no-sex --dog --make-bed --out binary_raw_SNPs ## create the binary files
-plink --bfile binary_raw_SNPs --make-pheno dog_breeds Golden_Retriever --assoc --allow-no-sex --dog --out Golden_Retriever_vs_ALL ## basic association analysis
-#head -n1 Golden_Retriever_vs_ALL.assoc > Golden_Retriever_vs_ALL.assoc.sorted
-#tail -n+2 Golden_Retriever_vs_ALL.assoc | sort --key=8 -nr >> Golden_Retriever_vs_ALL.assoc.sorted
-plink --bfile binary_raw_SNPs --make-pheno dog_breeds Golden_Retriever --model --allow-no-sex --dog --out Golden_Retriever_vs_ALL.mod ## model analysis
+plink --file $snps.NochrUn --allow-no-sex --dog --make-bed --out $snps.NochrUn.binary ## create the binary files
+
+## start the breed specific analysis
+breed="Boxer" ##"labrador_retriever" ##"weimaraner" ##"NSDTR" ##"Golden_Retriever"
+control="ALL"
+mkdir $breed.vs.$control && cd $breed.vs.$control
+
+## run plink association and model analysis 
+plink --bfile ../$snps.NochrUn.binary --make-pheno ../dog_breeds $breed --assoc --allow-no-sex --dog --out ${breed}_vs_${control} ## basic association analysis
+plink --bfile ../$snps.NochrUn.binary --make-pheno ../dog_breeds $breed  --model --allow-no-sex --dog --out ${breed}_vs_${control}.mod ## model analysis
 
 ## merge the association and model analysis in one output file
-awk '{if (FNR==1 || $5=="GENO") {print $2,$6,$7;} }' Golden_Retriever_vs_ALL.mod.model > Golden_Retriever_vs_ALL.mod.model.geno
-join -1 2 -2 1 <(sort -k 2b,2 Golden_Retriever_vs_ALL.assoc) <(sort -k 1b,1 Golden_Retriever_vs_ALL.mod.model.geno) > Golden_Retriever_vs_ALL.complete
-#grep "^SNP CHR" Golden_Retriever_vs_ALL.complete > Golden_Retriever_vs_ALL.complete.sorted
-#grep -v "^SNP CHR" Golden_Retriever_vs_ALL.complete | sort --key=8 -nr >> Golden_Retriever_vs_ALL.complete.sorted
+awk '{if (FNR==1 || $5=="GENO") {print $2,$6,$7;} }' ${breed}_vs_${control}.mod.model > ${breed}_vs_${control}.mod.model.geno
+join -1 2 -2 1 <(sort -k 2b,2 ${breed}_vs_${control}.assoc) <(sort -k 1b,1 ${breed}_vs_${control}.mod.model.geno) > ${breed}_vs_${control}.complete
+#grep "^SNP CHR" ${breed}_vs_${control}.complete > ${breed}_vs_${control}.complete.sorted
+#grep -v "^SNP CHR" ${breed}_vs_${control}.complete | sort --key=8 -nr >> ${breed}_vs_${control}.complete.sorted
 
 ## adjustment for multiple comprison  ## do you want to restrict the analsysis for SNPs present in enough no of cases and/or control?
-grep -v "^SNP CHR" Golden_Retriever_vs_ALL.complete | awk '$9!="NA"' > Golden_Retriever_vs_ALL.complete2
-cat Golden_Retriever_vs_ALL.complete2 | awk '{print $9}' > Golden_Retriever_vs_ALL.complete.pVal
+grep -v "^SNP CHR" ${breed}_vs_${control}.complete | awk '$9!="NA"' > ${breed}_vs_${control}.complete2
+cat ${breed}_vs_${control}.complete2 | awk '{print $9}' > ${breed}_vs_${control}.complete.pVal
 Rscript -e 'args=(commandArgs(TRUE)); data=read.table(args[1],header=F,sep="\t");'\
 'cor=p.adjust(data$V1,method="fdr");'\
 'data$V2=cor;'\
-'write.table(data,paste(args[1],"cor",sep="."), sep=" ", quote=F, row.names=F, col.names=F);' Golden_Retriever_vs_ALL.complete.pVal
-echo $(grep "^SNP CHR" Golden_Retriever_vs_ALL.complete | cut -d " " -f1-10,12,13) "FDR" > Golden_Retriever_vs_ALL.complete.cor
-paste -d " " Golden_Retriever_vs_ALL.complete2 Golden_Retriever_vs_ALL.complete.pVal.cor | cut -d " " -f1-10,12,13,15 | sort --key=13 -g >> Golden_Retriever_vs_ALL.complete.cor 
-#head -n1 Golden_Retriever_vs_ALL.complete.cor > Golden_Retriever_vs_ALL.complete.cor.sig
-cat Golden_Retriever_vs_ALL.complete.cor | awk '($13<0.05)' > Golden_Retriever_vs_ALL.complete.cor.sig
+'write.table(data,paste(args[1],"cor",sep="."), sep=" ", quote=F, row.names=F, col.names=F);' ${breed}_vs_${control}.complete.pVal
+echo $(grep "^SNP CHR" ${breed}_vs_${control}.complete | cut -d " " -f1-10,12,13) "FDR" > ${breed}_vs_${control}.complete.cor
+paste -d " " ${breed}_vs_${control}.complete2 ${breed}_vs_${control}.complete.pVal.cor | cut -d " " -f1-10,12,13,15 | sort --key=13 -g >> ${breed}_vs_${control}.complete.cor 
+cat ${breed}_vs_${control}.complete.cor | awk '($13<0.05)' > ${breed}_vs_${control}.complete.cor.sig
 
 ## merge the signifagant associations with their variant effect
-head -n1 Golden_Retriever_vs_ALL.complete.cor | awk '{$2="Location";$3="";print;}' > Golden_Retriever_vs_ALL.complete.cor.sig.X
-awk '{{if($2==39)$2="X";}$2=$2":"$3;$3="";print;}' Golden_Retriever_vs_ALL.complete.cor.sig >> Golden_Retriever_vs_ALL.complete.cor.sig.X ## restore the name of chrmosome x & merge column 2 and 3 to be the location
-grep -v "^##" snp_varEffect/variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > snp_varEffect.txt  ## remove hashed lines and fix the header to be readable
+head -n1 ${breed}_vs_${control}.complete.cor | awk '{$2="Location";$3="";print;}' > ${breed}_vs_${control}.complete.cor.sig.X
+awk '{{if($2==39)$2="X";}$2=$2":"$3;$3="";print;}' ${breed}_vs_${control}.complete.cor.sig >> ${breed}_vs_${control}.complete.cor.sig.X ## restore the name of chrmosome x & merge column 2& 3 to be the location
 Rscript -e 'args=(commandArgs(TRUE)); data1=read.table(args[1],header=T,sep=" "); data2=read.table(args[2],header=T,sep="\t");'\
 'dataMerge=merge(data1,data2,by="Location",all.x=TRUE,all.y=FALSE);'\
-'write.table(dataMerge,paste(args[1],"merge",sep="."), sep=" ", quote=F, row.names=F, col.names=T);' Golden_Retriever_vs_ALL.complete.cor.sig.X snp_varEffect.txt
-awk '{print $1,$14,$4,$5,$7,$6,$8,$9,$13,$10,$11,$12,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26}' Golden_Retriever_vs_ALL.complete.cor.sig.X.merge > Golden_Retriever_vs_ALL.final
-tail -n+2 Golden_Retriever_vs_ALL.final | awk '{print $16}' | sort | uniq > consquencies 
-tail -n+2 Golden_Retriever_vs_ALL.final | awk '{print $23}' | sort | uniq > impacts
-grep "IMPACT=HIGH" Golden_Retriever_vs_ALL.final > Golden_Retriever_vs_ALL.final.highImpact
+'write.table(dataMerge,paste(args[1],"merge",sep="."), sep=" ", quote=F, row.names=F, col.names=T);' ${breed}_vs_${control}.complete.cor.sig.X $varResults/breedSp/snp_varEffect.txt
+awk 'BEGIN{OFS="\t"}{print $1,$14,$4,$5,$6,$7,$13,$10,$11,$12,$16,$17,$19,$20,$21,$22,$23,$24,$26}' ${breed}_vs_${control}.complete.cor.sig.X.merge > ${breed}_vs_${control}.final.tab
+#tail -n+2 ${breed}_vs_${control}.final.tab | awk '{print $16}' | sort | uniq > consquencies 
+#tail -n+2 ${breed}_vs_${control}.final.tab | awk '{print $23}' | sort | uniq > impacts
+#head -n1 ${breed}_vs_${control}.final.tab > ${breed}_vs_${control}.final.highImpact
+#grep "IMPACT=HIGH" ${breed}_vs_${control}.final.tab >> ${breed}_vs_${control}.final.highImpact
 
-## mitochondrial associations
-head -n1 Golden_Retriever_vs_ALL.assoc > Golden_Retriever_vs_ALL.assoc.MT
-tail -n+2 Golden_Retriever_vs_ALL.assoc | awk '$9!="NA"' | sort --key=8 -nr >> Golden_Retriever_vs_ALL.assoc.MT
+## clean up some files
+rm -f *.X *.sig *.cor *.pVal *.complete *.complete2 *.mod.* *.log *.nosex *.assoc
 ########
 ## public data for chondrodysplasia
 mkdir $dogSeq/newData && cd $dogSeq/newData
@@ -787,9 +807,9 @@ sample="2202" ## sample="T582"
 cd $workingdata/newSeq/bwa_align/bwa_$sample
 #module load SAMTools/0.1.19
 module load SAMTools/1.0
+samtools index aligned_reads.sorted.merged.bam
 
 mkdir mapped
-samtools index aligned_reads.sorted.merged.bam
 region="chr12.32MB.45MB"
 samtools view -h aligned_reads.sorted.merged.bam chr12:32000000-45000000 -b > mapped/$region.bam
 samtools sort -n mapped/$region.bam mapped/$region.sorted
@@ -856,34 +876,38 @@ cat unmapped/s2_pe unmapped/s2_pe_se > unmapped/unmapped_R2.fastq
 
 #######################
 mkdir $dogSeq/SV
-cp $workingdata/newSeq/bwa_align/bwa_2202/pe_aligned_reads.bam $dogSeq/SV/S1_2202_pe_aligned_reads.bam
-cp $workingdata/newSeq/bwa_align/bwa_T582/pe_aligned_reads.bam $dogSeq/SV/S2_T582_pe_aligned_reads.bam
-cp $workingdata/newSeq/bwa_align/bwa_2239/pe_aligned_reads.bam $dogSeq/SV/R1_2239_pe_aligned_reads.bam
-cp $workingdata/newSeq/bwa_align/bwa_T586/pe_aligned_reads.bam $dogSeq/SV/R2_T586_pe_aligned_reads.bam
-cp $workingdata/newSeq/bwa_align/bwa_T593/pe_aligned_reads.bam $dogSeq/SV/R3_T593_pe_aligned_reads.bam
+cp $workingdata/newSeq/bwa_align/bwa_2202/pe_aligned_reads.sorted.bam $dogSeq/SV/S1_2202.bam
+cp $workingdata/newSeq/bwa_align/bwa_T582/pe_aligned_reads.sorted.bam $dogSeq/SV/S2_T582.bam
+cp $workingdata/newSeq/bwa_align/bwa_T586/pe_aligned_reads.sorted.bam $dogSeq/SV/R1_T586.bam
+cp $workingdata/newSeq/bwa_align/bwa_1052/pe_aligned_reads.sorted.bam $dogSeq/SV/R2_1052.bam
+cp $workingdata/newSeq/bwa_align/bwa_5809/pe_aligned_reads.sorted.bam $dogSeq/SV/R3_5809.bam
+cp $workingdata/newSeq/bwa_align/bwa_5813/pe_aligned_reads.sorted.bam $dogSeq/SV/R4_5813.bam
+#cp $workingdata/newSeq/bwa_align/bwa_2239/pe_aligned_reads.bam $dogSeq/SV/R1_2239_pe_aligned_reads.bam
+#cp $workingdata/newSeq/bwa_align/bwa_T593/pe_aligned_reads.bam $dogSeq/SV/R3_T593_pe_aligned_reads.bam
 
 module load SVDetect/0.8b
+module load SAMTools/1.0
 ## create dog_chr12.len & sample.sv.conf in $script_path/svdetect (copy templates from SVDetect test_sample
 sed -i "s|^cmap_file.*$|cmap_file=$script_path/svdetect/dog_chr12.len|" $script_path/svdetect/sample.sv.conf
 cd $dogSeq/SV 
-for bam in *_pe_aligned_reads.bam;do
- label=$(basename $bam ".bam")
- prefix=$(basename $bam "_pe_aligned_reads.bam")
+for label in S1_2202 S2_T582 R1_T586 R2_1052 R3_5809 R4_5813;do 
+ bam=$label.bam
  samtools sort -n -@4 $bam $label.Name_sorted
  perl $script_path/svdetect/BAM_preprocessingPairs.pl -d $label.Name_sorted.bam
- cp $script_path/svdetect/sample.sv.conf $prefix.sv.conf
- sed -i "s|^mates_file=.*$|mates_file=$label.Name_sorted.ab.bam|" $prefix.sv.conf
+ cp $script_path/svdetect/sample.sv.conf $label.sv.conf
+ sed -i "s|^mates_file=.*$|mates_file=$label.Name_sorted.ab.bam|" $label.sv.conf
  #Generation and filtering of links from the sample data
- SVDetect linking filtering -conf $prefix.sv.conf
+ SVDetect linking filtering -conf $label.sv.conf
  #Visualization in UCSC
- SVDetect links2bed -conf $prefix.sv.conf
+ SVDetect links2bed -conf $label.sv.conf
  #create a sample report
- SVDetect links2SV -conf $prefix.sv.conf
+ SVDetect links2SV -conf $label.sv.conf
 done
 
 module load BEDTools/2.24.0
 sed -i "s|^bed_output=.*$|bed_output=0|" S1_2202.sv.conf
 
+## compare all samples #### Failed to make meaningful results
 #sed -i "s|^list_samples=.*$|list_samples=S1_2202,S2_T582,R1_2239,R2_T586,R3_T593|" S1_2202.sv.conf 
 #sed -i "s|^list_read_lengths=.*$|list_read_lengths=100-100,100-100,100-100,100-100,100-100|" S1_2202.sv.conf 
 #sed -i "s|^file_suffix=.*$|file_suffix=_pe_aligned_reads.Name_sorted.ab.bam.intra.links.filtered|" S1_2202.sv.conf 
@@ -891,33 +915,66 @@ sed -i "s|^bed_output=.*$|bed_output=0|" S1_2202.sv.conf
 #mkdir compAll
 #mv SVDetect_results/*.compared* compAll/.
 
-sed -i "s|^list_samples=.*$|list_samples=S1_2202,R1_2239|" S1_2202.sv.conf
+## Compare each test vs control (you can use the config file of any sample to run all comparisons)
+sed -i "s|^list_samples=.*$|list_samples=S1_2202,R2_1052|" S1_2202.sv.conf
 sed -i "s|^list_read_lengths=.*$|list_read_lengths=100-100,100-100|" S1_2202.sv.conf
-sed -i "s|^file_suffix=.*$|file_suffix=_pe_aligned_reads.Name_sorted.ab.bam.intra.links.filtered|" S1_2202.sv.conf
+sed -i "s|^file_suffix=.*$|file_suffix=.Name_sorted.ab.bam.intra.links.filtered|" S1_2202.sv.conf
 SVDetect links2compare -conf S1_2202.sv.conf &> log2
-mkdir comp_S1_2202vsR1_2239
-mv SVDetect_results/*.compared* comp_S1_2202vsR1_2239/.
+mkdir comp_S1_2202vsR2_1052
+mv SVDetect_results/*.compared* comp_S1_2202vsR2_1052/.
 
-sed -i "s|^list_samples=.*$|list_samples=S2_T582,R2_T586|" S1_2202.sv.conf
-sed -i "s|^list_read_lengths=.*$|list_read_lengths=100-100,100-100|" S1_2202.sv.conf
-sed -i "s|^file_suffix=.*$|file_suffix=_pe_aligned_reads.Name_sorted.ab.bam.intra.links.filtered|" S1_2202.sv.conf
+sed -i "s|^list_samples=.*$|list_samples=S2_T582,R1_T586|" S1_2202.sv.conf
 SVDetect links2compare -conf S1_2202.sv.conf &> log2
-mkdir comp_S2_T582vsR2_T586
-mv SVDetect_results/*.compared* comp_S2_T582vsR2_T586/.
+mkdir comp_S2_T582vsR1_T586
+mv SVDetect_results/*.compared* comp_S2_T582vsR1_T586/.
 
+## compare the case-control results
 sed -i "s|^list_samples=.*$|list_samples=S1_2202,S2_T582|" S1_2202.sv.conf
-sed -i "s|^list_read_lengths=.*$|list_read_lengths=100-100,100-100|" S1_2202.sv.conf
-sed -i "s|^file_suffix=.*$|file_suffix=_pe_aligned_reads.Name_sorted.ab.bam.intra.links.filtered.compared|" S1_2202.sv.conf
-cp comp_S1_2202vsR1_2239/S1_2202_pe_aligned_reads.Name_sorted.ab.bam.intra.links.filtered.compared SVDetect_results/.
-cp comp_S2_T582vsR2_T586/S2_T582_pe_aligned_reads.Name_sorted.ab.bam.intra.links.filtered.compared SVDetect_results/.
+sed -i "s|^file_suffix=.*$|file_suffix=.Name_sorted.ab.bam.intra.links.filtered.compared|" S1_2202.sv.conf
+cp comp_S1_2202vsR2_1052/S1_2202.Name_sorted.ab.bam.intra.links.filtered.compared SVDetect_results/.
+cp comp_S2_T582vsR1_T586/S2_T582.Name_sorted.ab.bam.intra.links.filtered.compared SVDetect_results/.
 SVDetect links2compare -conf S1_2202.sv.conf &> log3
-mkdir comp_S1_2202vsS2_T582
-mv SVDetect_results/*.compared* comp_S1_2202vsS2_T582/.
+mkdir comp_S1_2202vsS2_T582_A
+mv SVDetect_results/*.compared* comp_S1_2202vsS2_T582_A/.
 
+## repeat the Comparison of each test vs another control
+sed -i "s|^list_samples=.*$|list_samples=S1_2202,R3_5809|" S1_2202.sv.conf
+sed -i "s|^file_suffix=.*$|file_suffix=.Name_sorted.ab.bam.intra.links.filtered|" S1_2202.sv.conf
+SVDetect links2compare -conf S1_2202.sv.conf &> log2
+mkdir comp_S1_2202vsR3_5809
+mv SVDetect_results/*.compared* comp_S1_2202vsR3_5809/.
 
+sed -i "s|^list_samples=.*$|list_samples=S2_T582,R4_5813|" S1_2202.sv.conf
+SVDetect links2compare -conf S1_2202.sv.conf &> log2
+mkdir comp_S2_T582vsR4_5813
+mv SVDetect_results/*.compared* comp_S2_T582vsR4_5813/.
 
-####################################
+## repeat the Comparison of the second case-control results
+sed -i "s|^list_samples=.*$|list_samples=S1_2202,S2_T582|" S1_2202.sv.conf
+sed -i "s|^file_suffix=.*$|file_suffix=.Name_sorted.ab.bam.intra.links.filtered.compared|" S1_2202.sv.conf
+cp comp_S1_2202vsR3_5809/S1_2202.Name_sorted.ab.bam.intra.links.filtered.compared SVDetect_results/.
+cp comp_S2_T582vsR4_5813/S2_T582.Name_sorted.ab.bam.intra.links.filtered.compared SVDetect_results/.
+SVDetect links2compare -conf S1_2202.sv.conf &> log3
+mkdir comp_S1_2202vsS2_T582_B
+mv SVDetect_results/*.compared* comp_S1_2202vsS2_T582_B/.
+
+## final merge of results
+sed -i "s|^list_samples=.*$|list_samples=compA,compB|" S1_2202.sv.conf
+sed -i "s|^file_suffix=.*$|file_suffix=.Name_sorted.ab.bam.intra.links.filtered.compared.compared|" S1_2202.sv.conf
+cp comp_S1_2202vsS2_T582_A/S1_2202.S2_T582.Name_sorted.ab.bam.intra.links.filtered.compared.compared SVDetect_results/compA.Name_sorted.ab.bam.intra.links.filtered.compared.compared
+cp comp_S1_2202vsS2_T582_B/S1_2202.S2_T582.Name_sorted.ab.bam.intra.links.filtered.compared.compared SVDetect_results/compB.Name_sorted.ab.bam.intra.links.filtered.compared.compared
+SVDetect links2compare -conf S1_2202.sv.conf &> log4
+mkdir comp_S1_2202vsS2_T582_final
+mv SVDetect_results/*.compared* comp_S1_2202vsS2_T582_final/.
+
+cd comp_S1_2202vsS2_T582_final
+cat compA.compB.Name_sorted.ab.bam.intra.links.filtered.compared.compared.compared.sv.txt | uniq > compA.compB.Name_sorted.ab.bam.intra.links.filtered.compared.compared.compared.sv_uniq.txt
+
+cd ..
 region="chr12.32MB.45MB"
-samtools sort mapped/$region.bam mapped/$region.CoordSorted                                                                         
-samtools index mapped/$region.CoordSorted.bam
-cp mapped/$region.CoordSorted.bam* ~/temp/.   
+for sample in S1_2202 S2_T582 R1_T586 R2_1052 R3_5809 R4_5813;do
+ samtools index $sample.bam 
+ samtools view -h $sample.bam chr12:32000000-45000000 -b > $sample.$region.bam
+ samtools index $sample.$region.bam
+done
+cp *.$region.bam* ~/temp/.   
