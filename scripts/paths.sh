@@ -14,5 +14,8 @@ knownIndels="$genome_dir/knowVar/canis_familiaris_indels.vcf"
 knownSNPs2="$genome_dir/knowVar/Broad.SNPs.vcf"
 knownSNPs="$genome_dir/knowVar/combine_union.vcf"
 
+snps="GenotypeGVCFs_output_max50.pass_snps"
+indels="GenotypeGVCFs_output_max50.pass_indels"
+breedSp="$varResults/breedSp"
 
 

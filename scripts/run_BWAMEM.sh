@@ -1,8 +1,8 @@
 #!/bin/sh
 
-if [ $# -lt 5 ]
+if [ $# -lt 6 ]
 then
-printf "\nUsage run_BWAMEM.sh [samples list] [replicates list] [library Name] [indexed reference] [script]\n"
+printf "\nUsage run_BWAMEM.sh [samples list] [replicates list] [library Name] [indexed reference] [read path] [script]\n"
 exit 0
 fi
 

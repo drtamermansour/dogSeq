@@ -14,7 +14,7 @@ vcf=$vcf
 #cp $inputSRA /tmp/.
 #cd /tmp
 
-variant_effect_predictor.pl -i $vcf --cache --offline --cache_version 86 -species canis_familiaris
+variant_effect_predictor.pl -i $vcf -offline --species canFam.NCBIgff
 
 #cp $(basename $inputSRA ".sra")*.gz $PBS_O_WORKDIR/.
 

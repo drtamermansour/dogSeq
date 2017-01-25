@@ -622,6 +622,9 @@ for var in "SNP" "INDEL";do
   grep "^\." $filterValues > novel.$var.$filter
 done; done
 
+mkdir filters && cd filters
+mv ../{*.SNP.*,SNP.*,*.INDEL.*,INDEL.*} .
+
 module load R/3.0.1
 for f in SNP.* INDEL.*;do
  Rscript ${script_path}/densityCurves.R "$f"
@@ -664,6 +667,7 @@ cd $varResults
 bash ${script_path}/run_snpVariantFiltration.sh "$gatk_ref" "GenotypeGVCFs_output_max50.raw_SNPs.vcf" "$script_path/snpVariantFiltration.sh"
 grep "^#" GenotypeGVCFs_output_max50.filtered_snps.vcf > GenotypeGVCFs_output_max50.pass_snps.vcf
 grep "PASS" GenotypeGVCFs_output_max50.filtered_snps.vcf >> GenotypeGVCFs_output_max50.pass_snps.vcf ## It filters 1,388,327 out of 15,353,085 (I noticed all chrM snps were filtered)
+grep -v "^#" GenotypeGVCFs_output_max50.pass_snps.vcf | wc -l ##13964758
 grep -v "PASS" GenotypeGVCFs_output_max50.filtered_snps.vcf > GenotypeGVCFs_output_max50.failed_snps.vcf
 grep -v "^#" GenotypeGVCFs_output_max50.failed_snps.vcf | awk '{A[$7]++}END{for(i in A)print i,A[i]}' | sort -k2,2nr > failed_snps.categories
 #bash ${script_path}/run_snpVariantRecalibrator.sh "GenotypeGVCFs_output_max50.vcf" "GenotypeGVCFs_output_max50.pass_snps.vcf" "$knownSNPs1" "$gatk_ref" "$script_path/snpVariantRecalibrator.sh"
@@ -671,6 +675,7 @@ grep -v "^#" GenotypeGVCFs_output_max50.failed_snps.vcf | awk '{A[$7]++}END{for(
 bash ${script_path}/run_indelVariantFiltration.sh "$gatk_ref" "GenotypeGVCFs_output_max50.raw_INDELs.vcf" "$script_path/indelVariantFiltration.sh"
 grep "^#" GenotypeGVCFs_output_max50.filtered_indels.vcf > GenotypeGVCFs_output_max50.pass_indels.vcf
 grep "PASS" GenotypeGVCFs_output_max50.filtered_indels.vcf >> GenotypeGVCFs_output_max50.pass_indels.vcf ## It filters 77,867 out of 8436580
+grep -v "^#" GenotypeGVCFs_output_max50.pass_indels.vcf | wc -l ##8436580
 grep -v "PASS" GenotypeGVCFs_output_max50.filtered_indels.vcf > GenotypeGVCFs_output_max50.failed_indels.vcf 
 grep -v "^#" GenotypeGVCFs_output_max50.failed_indels.vcf | awk '{A[$7]++}END{for(i in A)print i,A[i]}' | sort -k2,2nr > failed_indels.categories
 #bash ${script_path}/run_indelVariantRecalibrator.sh "GenotypeGVCFs_output_max50.vcf" "GenotypeGVCFs_output_max50.pass_indels.vcf" "$knownSNPs1" "$gatk_ref" "$script_path/indelVariantRecalibrator.sh"
@@ -683,122 +688,518 @@ sample_list="$dogSeq/all_g.vcfs.txt"
 target_bam="dedup_reads.bam"
 bash ${script_path}/run_readBackedPhasing_multi.sh "$gatk_ref" "$sample_list" "$target_bam" "GenotypeGVCFs_output_max50.combinedFiltered.vcf" "$script_path/readBackedPhasing_multi.sh"
 ##########################
-## varaiant annotation
-#module load annovar/20140409
-#annotate_variation.pl -buildver canFam3 --downdb --webfrom ucsc refGene dogdb/ ## failed
+## explor the distribution per chromosome
+##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count in genotypes, for each ALT allele, in the same order as listed">
+##INFO=<ID=AF,Number=A,Type=Float,Description="Allele Frequency, for each ALT allele, in the same order as listed">
+##INFO=<ID=AN,Number=1,Type=Integer,Description="Total number of alleles in called genotypes">
 
-## http://www.ensembl.org/info/docs/tools/vep/script/vep_tutorial.html
-#module load VEP/85
-wget https://github.com/Ensembl/ensembl-tools/archive/release/85.zip
-gunzip 85.gz
-cd ~/ensembl-tools-release-85/scripts/variant_effect_predictor/
-perl INSTALL.pl
-## install local cache using VEP-INSTALL.pl (http://www.ensembl.org/info/docs/tools/vep/script/vep_cache.html#offline)
-## for API installation say "Yes". but you can skip to download cache only
-## for cache files choose 12 : a merged file of RefSeq and Ensembl transcripts. Remember to use --merged when running the VEP with this cache
-## for FASTA files choose 9: Canis_familiaris.CanFam3.1.dna.toplevel.fa.gz. The FASTA file should be automatically detected by the VEP when using --cache or --offline. If it is not, use "--fasta /mnt/home/mansourt/.vep/canis_familiaris/81_CanFam3.1/Canis_familiaris.CanFam3.1.dna.toplevel.fa"
-## for plugins choose 0 for all
-#variant_effect_predictor.pl -i GenotypeGVCFs_output_max50.raw_SNPs.vcf --cache --offline -species canis_familiaris --merged
 cd $varResults
-qsub -v vcf="GenotypeGVCFs_output_max50.raw_SNPs.vcf" ${script_path}/vep.sh
-mkdir snp_varEffect
-mv variant_effect_output.txt* snp_varEffect/.
+#for var in "snps" "indels";do
+for var in "snps";do
+ input="GenotypeGVCFs_output_max50.pass_"$var".vcf"
+ cat $input | awk -F "[\t;]" -v OFS="\t" '!/#/{ delete vars; for(i = 1; i <= NF; ++i) { n = index($i, "="); if(n) { x = substr($i, n + 1); vars[substr($i, 1, n - 1)] = substr($i, n + 1, length(x)) } } AC = vars["AC"]; AF = vars["AF"]; AN = vars["AN"]; print $1,$2,AC,AF,AN;}' > $var.dist
+done
 
-qsub -v vcf="GenotypeGVCFs_output_max50.raw_INDELs.vcf" ${script_path}/vep.sh
-mkdir indel_varEffect
-mv variant_effect_output.txt* indel_varEffect/.
+#for var in "snps" "indels";do
+for var in "snps";do
+ for chr in chr10 chr11 chr12;do
+  #head -n1200000 $var.dist | awk -F"\t" -v chr="$chr" '{if($1==chr && $3>2 && $4>0.05 && $5>=100) print;}' > $var.$chr.dist
+  Rscript -e 'args=(commandArgs(TRUE)); data=read.table(args[1],header=F);'\
+'outputPDF=paste(args[1],"hist","pdf",sep=".");pdf(outputPDF);hist(data$V2);dev.off();'\
+'outputPDF=paste(args[1],"hist100","pdf",sep=".");pdf(outputPDF);hist(data$V2,breaks=100);dev.off();'\
+'outputPDF=paste(args[1],"hist1000","pdf",sep=".");pdf(outputPDF);hist(data$V2,breaks=1000);dev.off();'\
+'outputPDF=paste(args[1],"hist10000","pdf",sep=".");pdf(outputPDF);hist(data$V2,breaks=10000);dev.off();' $var.$chr.dist;
+done;done
+###############################
+## varaiant annotation
+for var in SNPs INDELs;do
+ mkdir -p $varResults/${var}_ENS.varEffect && cd $varResults/${var}_ENS.varEffect;
+ #qsub -v vcf="$varResults/GenotypeGVCFs_output_max50.raw_$var.vcf" ${script_path}/vep_merged.sh;
+ qsub -v vcf="$varResults/GenotypeGVCFs_output_max50.raw_$var.vcf" ${script_path}/vep.sh;
+ mkdir -p $varResults/${var}_NCBI.varEffect && cd $varResults/${var}_NCBI.varEffect;
+ qsub -v vcf="$varResults/GenotypeGVCFs_output_max50.raw_$var.vcf" ${script_path}/vep_ncbi.sh;
+done
 ##########################
 ## breed specific varaints:
-snps="GenotypeGVCFs_output_max50.pass_snps"  ## "GenotypeGVCFs_output_max50.raw_SNPs"
-snpEff=$varResults/snp_varEffect/variant_effect_output.txt
-mkdir breedSp && cd breedSp
-## remove chrUn from VCF ## do you want to filter the low quality SNPs?
-grep -v "^chrUn_" ../$snps.vcf > $snps.NochrUn.vcf
-## remove hashed lines and fix the header to be readable
-grep -v "^##" $snpEff | sed 's/#Uploaded_variation/Uploaded_variation/' > snp_varEffect.txt 
-## prepare Plink input
+snps="GenotypeGVCFs_output_max50.pass_snps"  
+indels="GenotypeGVCFs_output_max50.pass_indels"
+
+mkdir -p breedSp/{snps,indels}
+breedSp="$varResults/breedSp"
+## prepare VCF files for analysis
+## SNPs: remove chrUn from VCF 
+grep -v "^chrUn_" $snps.vcf > $breedSp/snps/$snps.NochrUn.vcf
+## INDELS: select monoalleleic indels, replace with uniq character,and remove chrUn from VCF 
+awk '/#/{print;next}{if($5 !~ /,/){print}}' $indels.vcf > $breedSp/indels/$indels.monoAllel.vcf ##filtered 1145936 multialleleic indels
+awk 'BEGIN{FS="\t";OFS="\t"}/#/{print;next}{if(length($4)>1){$4="U"};if(length($5)>1){$5="U"};print;}' $breedSp/indels/$indels.monoAllel.vcf > $breedSp/indels/$indels.monoAllel_edit.vcf
+grep -v "^chrUn_" $breedSp/indels/$indels.monoAllel_edit.vcf > $breedSp/indels/$indels.NochrUn.vcf
+
 module load vcftools/0.1.14
-vcftools --vcf $snps.NochrUn.vcf --plink --out $snps.NochrUn
-#awk '{print $1,$2,1}' GenotypeGVCFs_output_max50.raw_SNPs.ped > GenotypeGVCFs_output_max50.raw_SNPs.phe_blank
-#awk '{ if ( $1 == "CWA562" || $1 == "T493" ) { $3 = 2 }; print}' GenotypeGVCFs_output_max50.raw_SNPs.phe_blank > GenotypeGVCFs_output_max50.raw_SNPs.phe
-## create binary inputs
 module load plink/1.9
-plink --file $snps.NochrUn --allow-no-sex --dog --make-bed --out $snps.NochrUn.binary ## create the binary files
+for var in snps indels;do
+ cd $breedSp/$var
+ ## prepare Plink input
+ vcftools --vcf ${!var}.NochrUn.vcf --plink --out ${!var}.NochrUn
+ ## create binary inputs
+ plink --file ${!var}.NochrUn --allow-no-sex --dog --make-bed --out ${!var}.NochrUn.binary
+done
 
+##########################
+## PLINK statistics
+module load plink/1.9
+var="snps";path="$breedSp/$var";binary="GenotypeGVCFs_output_max50.pass_$var.NochrUn.binary";
+control="ALL";breed="Boxer";breed_list="dog_breeds";
+cd $path/$breed.vs.$control
+
+#### Temp code #####
+## identity-by-missingness (IBM) clustering
+plink --bfile $path/$binary --cluster missing --dog --out "IBM" --make-pheno $path/../$breed_list $breed --allow-no-sex
+## population stratification: identity-by-state (IBS) clustering
+plink --bfile $path/$binary --cluster --dog --out "IBS" --make-pheno $path/../$breed_list $breed --allow-no-sex
+## prepare a pruned list of SNPs for IBD and Inbreeding coefficients analysis
+plink --bfile $path/$binary --indep 50 5 2 --dog --out "pruned"
+## Pairwise IBD estimation
+## identity-by-state (IBS) is useful for detecting pairs of individuals who look more different from each other than you'd expect in a random, homogeneous sample.
+## identity-by-descent (IBD) find pairs of individuals who look too similar to eachother, i.e. more than we would expect by chance in a random sample.
+plink --bfile $path/$binary --genome --dog --out "IBD" --cluster
+plink --bfile $path/$binary --genome --dog --out "IBD_pruned" --cluster --extract pruned.prune.in
+## Inbreeding coefficients
+plink --bfile $path/$binary --het --dog --out "InbreedCo"
+plink --bfile $path/$binary --het --dog --out "InbreedCo_pruned" --extract pruned.prune.in
+#### End of Temp code ####
+
+## Pairwise IBD estimation with breed specific pruned SNPs
+mkdir $varResults/breedSp/IBD && cd $varResults/breedSp/IBD
+for breed in Pug Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do
+ echo $breed;
+ plink --bfile $path/$binary --indep 50 5 2 --dog --out "$breed.pruned" --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
+ plink --bfile $path/$binary --genome --dog --out "$breed" --extract $breed.pruned.prune.in --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
+done
+rm *.nosex
+grep "Pruning complete" *.pruned.log > Pruning.txt
+head -n1 Boxer.genome > genome.txt
+for f in *.genome;do tail -n+2 $f >> genome.txt;done
+
+## Inbreeding coefficients with breed specific pruned SNPs
+mkdir $breedSp/InbreedCo && cd $breedSp/InbreedCo
+for breed in Pug Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do
+ echo $breed;
+ ## SNPs are pruned in each breed based on the variance inflation factor (VIF), which recursively removes SNPs within a sliding window of 50 SNPs and 5 SNPs is used to shift the window at each step with VIF threathold equals 2 (The parameters for --indep)
+ plink --bfile $path/$binary --indep 50 5 2 --dog --out "$breed.pruned" --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
+ plink --bfile $path/$binary --het --dog --out "$breed" --extract $breed.pruned.prune.in --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
+done
+rm *.nosex
+grep "^--het" *.log > het_scan.txt
+head -n1 Boxer.het > het.txt
+for f in *.het;do tail -n+2 $f >> het.txt;done
+
+mkdir $breedSp/InbreedCo_unpruned && cd $breedSp/InbreedCo_unpruned  ## to see how using unpruned SNPs would affect the results
+for breed in Pug Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do
+ echo $breed;
+ plink --bfile $path/$binary --het --dog --out "$breed" --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
+done
+rm *.nosex
+grep "^--het" *.log > het_scan.txt
+head -n1 Boxer.het > het.txt
+for f in *.het;do tail -n+2 $f >> het.txt;done
+
+mkdir $breedSp/InbreedCo_relat && cd $breedSp/InbreedCo_relat ## to see the effect of presence of known offsprings 
+breed_list="dog_breeds_all"
+for breed in Boxer labrador_retriever;do
+ echo $breed;
+ plink --bfile $path/$binary --indep 50 5 2 --dog --out "$breed.pruned" --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
+ plink --bfile $path/$binary --het --dog --out "$breed" --extract $breed.pruned.prune.in --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
+done
+rm *.nosex
+grep "^--het" *.log > het_scan.txt
+head -n1 Boxer.het > het.txt
+for f in *.het;do tail -n+2 $f >> het.txt;done
+#########################
 ## start the breed specific analysis
-breed="Boxer" ##"labrador_retriever" ##"weimaraner" ##"NSDTR" ##"Golden_Retriever"
-control="ALL"
-mkdir $breed.vs.$control && cd $breed.vs.$control
+for var in snps indels;do
+ path="$breedSp/$var";
+ binary="GenotypeGVCFs_output_max50.pass_$var.NochrUn.binary" 
+ qsub -v path="$path",binary="$binary",breed="Whippet",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="Bulldog_English",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="Newfoundland",control="ALL",breed_list="dog_breeds_Newfoundland" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="Rottweiler",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="Toller",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="Boxer",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="labrador_retriever",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="weimaraner",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="Golden_Retriever",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="Pug",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="Brachy",control="ALL",breed_list="dog_breeds_brachy" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="Hunting",control="ALL",breed_list="dog_breeds_hunt" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="Smart",control="ALL",breed_list="dog_breeds_smart" $script_path/breedSp_plink.sh
+ ## coat colors
+ qsub -v path="$path",binary="$binary",breed="Red",control="ALL",breed_list="dog_breeds_Red" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="maskFixed",control="ALL",breed_list="dog_breeds_maskFixed" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="maskReport",control="ALL",breed_list="dog_breeds_maskReport" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="Grizzle",control="ALL",breed_list="dog_breeds_Grizzle" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="brindle",control="ALL",breed_list="dog_breeds_brindle" $script_path/breedSp_plink.sh
 
-## run plink association and model analysis 
-plink --bfile ../$snps.NochrUn.binary --make-pheno ../dog_breeds $breed --assoc --allow-no-sex --dog --out ${breed}_vs_${control} ## basic association analysis
-plink --bfile ../$snps.NochrUn.binary --make-pheno ../dog_breeds $breed  --model --allow-no-sex --dog --out ${breed}_vs_${control}.mod ## model analysis
+ qsub -v path="$path",binary="$binary",breed="tick",control="ALL",breed_list="dog_breeds_tick" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="tan",control="ALL",breed_list="dog_breeds_tan" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="brown",control="ALL",breed_list="dog_breeds_brown" $script_path/breedSp_plink.sh
 
-## merge the association and model analysis in one output file
-awk '{if (FNR==1 || $5=="GENO") {print $2,$6,$7;} }' ${breed}_vs_${control}.mod.model > ${breed}_vs_${control}.mod.model.geno
-join -1 2 -2 1 <(sort -k 2b,2 ${breed}_vs_${control}.assoc) <(sort -k 1b,1 ${breed}_vs_${control}.mod.model.geno) > ${breed}_vs_${control}.complete
-#grep "^SNP CHR" ${breed}_vs_${control}.complete > ${breed}_vs_${control}.complete.sorted
-#grep -v "^SNP CHR" ${breed}_vs_${control}.complete | sort --key=8 -nr >> ${breed}_vs_${control}.complete.sorted
+ qsub -v path="$path",binary="$binary",breed="HOD",control="ALL",breed_list="dog_breeds_HOD" $script_path/breedSp_plink.sh
+ qsub -v path="$path",binary="$binary",breed="CED",control="ALL",breed_list="dog_breeds_CED" $script_path/breedSp_plink.sh
 
-## adjustment for multiple comprison  ## do you want to restrict the analsysis for SNPs present in enough no of cases and/or control?
-grep -v "^SNP CHR" ${breed}_vs_${control}.complete | awk '$9!="NA"' > ${breed}_vs_${control}.complete2
-cat ${breed}_vs_${control}.complete2 | awk '{print $9}' > ${breed}_vs_${control}.complete.pVal
-Rscript -e 'args=(commandArgs(TRUE)); data=read.table(args[1],header=F,sep="\t");'\
-'cor=p.adjust(data$V1,method="fdr");'\
-'data$V2=cor;'\
-'write.table(data,paste(args[1],"cor",sep="."), sep=" ", quote=F, row.names=F, col.names=F);' ${breed}_vs_${control}.complete.pVal
-echo $(grep "^SNP CHR" ${breed}_vs_${control}.complete | cut -d " " -f1-10,12,13) "FDR" > ${breed}_vs_${control}.complete.cor
-paste -d " " ${breed}_vs_${control}.complete2 ${breed}_vs_${control}.complete.pVal.cor | cut -d " " -f1-10,12,13,15 | sort --key=13 -g >> ${breed}_vs_${control}.complete.cor 
-cat ${breed}_vs_${control}.complete.cor | awk '($13<0.05)' > ${breed}_vs_${control}.complete.cor.sig
+ #qsub -v path="$path",binary="$binary",breed="Golden_Retriever",control="labrador_retriever",breed_list="dog_breeds_Labs_golden" $script_path/breedSp_plink.sh
+ #qsub -v path="$path",binary="$binary",breed="Golden_Retriever",control="Boxer",breed_list="dog_breeds_Boxer_golden" $script_path/breedSp_plink.sh
+done
+##########################
+## Annotation
+## create the VCF_info tables (VCF dependent) 
+for var in snps indels;do
+ cd $breedSp/$var
+ echo -e "Location\tCHROM\tPOS\tID\tREF\tALT" > VCF_info
+ grep -v "^chrUn_" $varResults/${!var}.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{print substr($1,4)":"$2,$1,$2,$3,$4,$5}' >> VCF_info
+done
 
-## merge the signifagant associations with their variant effect
-head -n1 ${breed}_vs_${control}.complete.cor | awk '{$2="Location";$3="";print;}' > ${breed}_vs_${control}.complete.cor.sig.X
-awk '{{if($2==39)$2="X";}$2=$2":"$3;$3="";print;}' ${breed}_vs_${control}.complete.cor.sig >> ${breed}_vs_${control}.complete.cor.sig.X ## restore the name of chrmosome x & merge column 2& 3 to be the location
-Rscript -e 'args=(commandArgs(TRUE)); data1=read.table(args[1],header=T,sep=" "); data2=read.table(args[2],header=T,sep="\t");'\
-'dataMerge=merge(data1,data2,by="Location",all.x=TRUE,all.y=FALSE);'\
-'write.table(dataMerge,paste(args[1],"merge",sep="."), sep=" ", quote=F, row.names=F, col.names=T);' ${breed}_vs_${control}.complete.cor.sig.X $varResults/breedSp/snp_varEffect.txt
-awk 'BEGIN{OFS="\t"}{print $1,$14,$4,$5,$6,$7,$13,$10,$11,$12,$16,$17,$19,$20,$21,$22,$23,$24,$26}' ${breed}_vs_${control}.complete.cor.sig.X.merge > ${breed}_vs_${control}.final.tab
-#tail -n+2 ${breed}_vs_${control}.final.tab | awk '{print $16}' | sort | uniq > consquencies 
-#tail -n+2 ${breed}_vs_${control}.final.tab | awk '{print $23}' | sort | uniq > impacts
-#head -n1 ${breed}_vs_${control}.final.tab > ${breed}_vs_${control}.final.highImpact
-#grep "IMPACT=HIGH" ${breed}_vs_${control}.final.tab >> ${breed}_vs_${control}.final.highImpact
+## prepare the variation effect file (VCF dependent)
+## Notes: Current code does not fir for multi-allelic indel variants
+for annDB in "ENS" "NCBI";do #echo $annDB;done
+ ## SNPs: remove hashed lines and fix the header to be readable 
+ cd $varResults/SNPs_$annDB.varEffect;
+ grep -v "^##" variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > $breedSp/snps/$annDB.varEffect.txt;
+ ## indels: remove hashed lines, fix the header to be readable, and adjust the location coordinates
+ cd $varResults/INDELs_$annDB.varEffect;
+ #grep -v "^##" variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > tempVarEff.txt
+ #tail -n+2 tempVarEff.txt | awk 'BEGIN{FS="\t";}{print $1;}' > tempVarEff2.txt; sed -i 's/^Un_/Un-/' tempVarEff2.txt;
+ #echo "Location" > tempVarEff3.txt
+ #awk 'BEGIN{FS="_";}{print $1":"$2-1;}' tempVarEff2.txt >> tempVarEff3.txt; sed -i 's/^Un-/Un_/' tempVarEff3.txt;
+ #paste tempVarEff3.txt tempVarEff.txt | awk 'BEGIN{FS="\t";OFS="\t"}{print $2,$1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15;}' > $breedSp/indels/$annDB.varEffect.txt2
+ #rm tempVarEff*.txt
+ grep -v "^##" variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > tempVarEff.txt
+ echo "Location" > tempVarEff2.txt;
+ grep -v "^#" variant_effect_output.txt | awk 'BEGIN{FS="[\t:]";}{split($3,a,"-");if($4=="-"){print $2":"a[1]-1}else{print $2":"a[1]}}' >> tempVarEff2.txt;
+ paste tempVarEff2.txt tempVarEff.txt | awk 'BEGIN{FS="\t";OFS="\t"}{print $2,$1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15;}' > $breedSp/indels/$annDB.varEffect.txt
+ rm tempVarEff*.txt
+ ## pusdo codo to consider multi-allelic variants.
+ # read indels VCF file to define multi-allelic variants and save them in format matching 1st column of VEP variant_effect_output.txt >  dup_ids
+ # cat dup_ids | grep -v -Fwf - variant_effect_output.txt > variant_effect_output_noDup.txt
+ #vgrep -v "^##" variant_effect_output_noDup.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > tempVarEff.txt
+done 
 
-## clean up some files
-rm -f *.X *.sig *.cor *.pVal *.complete *.complete2 *.mod.* *.log *.nosex *.assoc
-########
-## public data for chondrodysplasia
-mkdir $dogSeq/newData && cd $dogSeq/newData
-## test samples
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/ERR/ERR120/ERR1201390/ERR1201390.sra 
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/ERR/ERR674/ERR674650/ERR674650.sra  
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR163/SRR1635712/SRR1635712.sra  
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR163/SRR1635701/SRR1635701.sra 
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR163/SRR1634459/SRR1634459.sra  
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/ERR/ERR466/ERR466754/ERR466754.sra  
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/ERR/ERR436/ERR436043/ERR436043.sra  
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR578/SRR578194/SRR578194.sra ## the biggest run
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR209/SRR2094385/SRR2094385.sra  
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR209/SRR2094386/SRR2094386.sra 
-## control samples
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR274/SRR2747512/SRR2747512.sra
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR201/SRR2016145/SRR2016145.sra
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR201/SRR2016179/SRR2016179.sra
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR201/SRR2016138/SRR2016138.sra
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR201/SRR2016125/SRR2016125.sra
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/ERR/ERR466/ERR466752/ERR466752.sra
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR209/SRR2095362/SRR2095362.sra
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR209/SRR2095503/SRR2095503.sra
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR209/SRR2095318/SRR2095318.sra
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR209/SRR2094389/SRR2094389.sra
-wget ftp://ftp-trace.ncbi.nlm.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR209/SRR2095457/SRR2095457.sra
+## Extended Annotation (More temp work in extAnn.sh) (VCF independent)
+cd $breedSp
+## A) Extend ENSEMBL annotation:
+# Download tables for dog genes from Biomart (www.ensembl.org/biomart) >> Database:Ensembl Genes 86, Dataset:Canis familiaris genes(CanFam3.1) ,Attributes > GENE > Ensembl > Ensembl Transcript ID, Associated Gene Name, Gene type, Description. Select results export to "file", with "TSV" format, and select "Unique results only". Save as "dogEnsembl_TransInfo.txt"
+echo -e "Transcript_ID\tGene_Name\tGene_biotype\tDescription" > ENS_TransInfo.txt
+tail -n+2 dogEnsembl_TransInfo.txt | awk 'BEGIN { FS = OFS = "\t" } { for(i=1; i<=NF; i++) if($i ~ /^ *$/) $i = "-" }; { print $0 }' >> ENS_TransInfo.txt ## dogEnsembl_TransInfo_noEmpty.txt
+## B) Extend NCBI annotation
+wget ftp://ftp.ncbi.nih.gov/genomes/Canis_lupus_familiaris/GFF/ref_CanFam3.1_top_level.gff3.gz
+gunzip ref_CanFam3.1_top_level.gff3.gz 
+grep "ID=rna" ref_CanFam3.1_top_level.gff3 | awk -F "\t" '{print $9}' | awk -F "[,;]" -v OFS="\t" '{ delete vars; for(i = 1; i <= NF; ++i) { n = index($i, "="); if(n) { vars[substr($i, 1, n - 1)] = substr($i, n + 1) } } Dbxref = vars["Dbxref"]; Name = vars["Name"]; gene = vars["gene"]; product = vars["product"]; } { print Dbxref,Name,gene,product }' > NCBI_TransInfo.temp.trans;
+grep -v "^#" ref_CanFam3.1_top_level.gff3 | awk -F "\t" '{if($3=="gene")print $9}' | awk -F ";" -v OFS="\t" '{ delete vars; for(i = 1; i <= NF; ++i) { n = index($i, "="); if(n) { vars[substr($i, 1, n - 1)] = substr($i, n + 1) } } Dbxref = vars["Dbxref"]; gene_biotype = vars["gene_biotype"]; } { print Dbxref,gene_biotype }' > NCBI_TransInfo.temp.gene;
+Rscript -e 'args=(commandArgs(TRUE));data1=read.delim(args[1],header=F);data2=read.delim(args[2],header=F);'\
+'dataMerge=merge(data1,data2,by="V1",all.x=F,all.y=T); colnames(dataMerge)=c("Gene_ID","Gene_biotype","Transcript_ID","Gene_Name","Description");'\
+'write.table(dataMerge[,c(3,4,2,5)],"NCBI_TransInfo.txt", sep="\t", quote=F, row.names=F, col.names=T);' NCBI_TransInfo.temp.gene NCBI_TransInfo.temp.trans
+rm NCBI_TransInfo.temp.*
+sed -i 's/%2C/,/g' NCBI_TransInfo.txt; sed -i 's/%3B/;/g' NCBI_TransInfo.txt;
+
+control="ALL";
+for var in snps indels;do echo $var;
+ path="$breedSp/$var";
+ for annDB in ENS NCBI;do echo $annDB;
+  for breed in HOD CED;do echo $breed;
+  #for breed in Red maskFixed maskReport Grizzle brindle tick tan brown;do echo $breed;
+  #for breed in Brachy Hunting Smart;do echo $breed;
+  #for breed in Pug Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do echo $breed;
+   cd $path/$breed.vs.$control;
+   qsub -v VCF_info="$path/VCF_info",assocTable="${breed}_vs_${control}.complete.genoCor.fdrCor",varEffect="$path/$annDB.varEffect.txt",TransInfo="$breedSp/${annDB}_TransInfo.txt",suffix="${annDB}.ann" $script_path/annotatPlink.sh
+  done
+ done
+done
+#########################
+## filtration
+control="ALL";
+for var in snps indels;do echo $var;
+ path="$varResults/breedSp/$var";
+ #for breed in HOD CED;do echo $breed;
+ #for breed in Red maskFixed maskReport Grizzle brindle tick tan brown;do echo $breed;
+ #for breed in Brachy Hunting Smart;do echo $breed;
+ #for breed in Pug Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do echo $breed;
+  cd $path/$breed.vs.$control;
+  for annDB in ENS NCBI;do echo $annDB;
+   annFile=${breed}_vs_${control}.complete.genoCor.fdrCor.$annDB.ann
+   head -n1 $annFile > header  
+   (cat header && awk '{if($18=="Transcript")print;}' $annFile) > $annFile.trans
+   (cat header && grep "IMPACT=HIGH" $annFile.trans) > $annFile.trans.Hi
+   (cat header && grep "IMPACT=MODERATE" $annFile.trans) > $annFile.trans.Mod
+
+   (cat header && awk '{if(($7-$8)>=0.5 || ($8-$7)>=0.5)print;}' $annFile) > $annFile.genoDif
+
+   (cat header && awk '{if($18=="Transcript")print;}' $annFile.genoDif) > $annFile.genoDif.trans
+   (cat header && grep "IMPACT=HIGH" $annFile.genoDif.trans) > $annFile.genoDif.trans.Hi
+   (cat header && grep "IMPACT=MODERATE" $annFile.genoDif.trans) > $annFile.genoDif.trans.Mod
+
+   (cat header && tail -n+2 $annFile | sort -k9,9 -g | head -n100) > $annFile.sig
+
+   #(cat header && awk '{if(($7-$8)>=1 || ($8-$7)>=1)print;}' $annFile) > $annFile.fixed
+  done
+ done
+done
+#########################
+## create count statistics
+cd $varResults/breedSp
+for annDB in ENS NCBI;do echo $annDB;
+ suf="$annDB.ann"
+ for f in */*/*.$suf;do echo $f $(tail -n+2 $f | awk -F"\t" '{print $1}' | sort | uniq | wc -l); done > $annDB.Tot.txt;
+ for f in */*/*.$suf.trans;do echo $f $(tail -n+2 $f | awk -F"\t" '{print $1}' | sort | uniq | wc -l); done > $annDB.Trans.txt;
+ for f in */*/*.$suf.trans.Hi;do echo $f $(tail -n+2 $f | awk -F"\t" '{print $1}' | sort | uniq | wc -l); done > $annDB.TransHi.txt;
+ for f in */*/*.$suf.trans.Mod;do echo $f $(tail -n+2 $f | awk -F"\t" '{print $1}' | sort | uniq | wc -l); done > $annDB.TransMod.txt;
+
+ for f in */*/*.$suf.genoDif;do echo $f $(tail -n+2 $f | awk -F"\t" '{print $1}' | sort | uniq | wc -l); done > $annDB.genDif.txt;
+ for f in */*/*.$suf.genoDif.trans;do echo $f $(tail -n+2 $f | awk -F"\t" '{print $1}' | sort | uniq | wc -l); done > $annDB.genDifTrans.txt;
+ for f in */*/*.$suf.genoDif.trans.Hi;do echo $f $(tail -n+2 $f | awk -F"\t" '{print $1}' | sort | uniq | wc -l); done > $annDB.genDifTransHi.txt;
+ for f in */*/*.$suf.genoDif.trans.Mod;do echo $f $(tail -n+2 $f | awk -F"\t" '{print $1}' | sort | uniq | wc -l); done > $annDB.genDifTransMod.txt;
+done
+##########################
+## Retrieving VCF records based on list of variants
+module load bcftools/1.2
+control="ALL";
+for var in snps indels;do echo $var;
+ path="$varResults/breedSp/$var";
+ #for breed in HOD CED;do echo $breed;
+ for breed in Red maskFixed maskReport Grizzle brindle tick tan brown;do echo $breed;
+ #for breed in Brachy Hunting Smart;do echo $breed;
+ #for breed in Pug Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do echo $breed;
+  cd $path/$breed.vs.$control
+  for annDB in ENS NCBI;do echo $annDB;
+   for subset in Mod Hi;do echo $subset
+    target=${breed}_vs_${control}.complete.genoCor.fdrCor.$annDB.ann.genoDif.trans.$subset
+    tail -n+2 $target | awk 'BEGIN{FS=OFS="\t";}{print $2,$3}' | sort | uniq > $annDB.target_list
+    pathToVCF=varResults_$var;vcfFile_gz=$(ls ${!pathToVCF}/GenotypeGVCFs_output_max50.raw_*.vcf.gz);  ## include overlapping indels 
+    bcftools view -Ov -o $target.vcf_temp -R $annDB.target_list $vcfFile_gz;
+    grep -v "^##" $target.vcf_temp > $target.vcf; rm $target.vcf_temp;
+    echo "$target.vcf" "done";
+done;done;done;done
+cd $varResults
+rsync -a --prune-empty-dirs --include '*/' --include '*.ann.genoDif.trans.Hi.vcf' --exclude '*' breedSp ~/temp/.
+
+cd $dogSeq/assocToVCF
+var="snps";target="Weim_VCF_needed_snps.txt";
+#var="indels";target="Weim_VCF_needed_indels.txt";
+tr '\r' '\n' < $target > $target.unix
+tail -n+2 $target.unix | awk 'BEGIN{FS=OFS="\t";}{print $2,$3}' | sort | uniq > target_list
+pathToVCF=varResults_$var;vcfFile_gz=$(ls ${!pathToVCF}/GenotypeGVCFs_output_max50.raw_*.vcf.gz);  ## include overlapping indels 
+bcftools view -Ov -R target_list $vcfFile_gz | grep -v "^##" > $target.v2.vcf 
+
+## Retriev BAM file for list of samples for a specific region
+module load SAMTools/0.1.19
+#chr="chr21";pos=40274105;
+chr="chr2";pos=65014742;
+region=$chr.$pos
+start=$(($pos-1000));end=$(($pos+1000));
+for id in BD143 S_730 BD514 BD398 BD601;do
+ sample=$(grep _$id $dogSeq/data/*/bwa_align/sample_list.txt | sed 's/.*://')/dedup_reads.bam
+ echo $sample
+ #samtools index $sample
+ samtools view -h $sample $chr:${start}-${end} -b > ~/temp/$id.$region.bam
+ samtools index ~/temp/$id.$region.bam
+done
+##########################
+## exploring the battern of allele frequency
+cd $varResults/breedSp/indels/Boxer.vs.ALL
+cat Boxer_vs_ALL.assoc.X | cut -d" " -f5,6 > originalPlink_allFreq
+Rscript -e 'args=(commandArgs(TRUE)); data=read.table(args[1],header=T);'\
+'outputPDF=paste("F_A","hist","pdf",sep=".");pdf(outputPDF);hist(data$F_A);dev.off();'\
+'outputPDF=paste("F_U","hist","pdf",sep=".");pdf(outputPDF);hist(data$F_U);dev.off();' originalPlink_allFreq
+
+cat Boxer_vs_ALL.assoc.X.VCF_info | cut -d" " -f3,4 > correctedPlink_allFreq
+Rscript -e 'args=(commandArgs(TRUE)); data=read.table(args[1],header=T);'\
+'outputPDF=paste("F_A","hist_cor","pdf",sep=".");pdf(outputPDF);hist(data$F_A);dev.off();'\
+'outputPDF=paste("F_U","hist_cor","pdf",sep=".");pdf(outputPDF);hist(data$F_U);dev.off();' correctedPlink_allFreq
+
+###########################
+## clustering of breeds
+mkdir -p $varResults/breedCluster && cd $varResults/breedCluster
+for var in snps indels;do
+ path="$varResults/breedSp/$var";
+ for breed in Pug Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do echo $breed;
+  cd $path/$breed.vs.$control
+  echo -e "Location\t"$breed > $varResults/breedCluster/${breed}.assoc.$var.F_A
+  tail -n+2 ${breed}_vs_ALL.complete.genoCor | awk 'BEGIN{OFS="\t"}{print $1,$2}' >> $varResults/breedCluster/${breed}.assoc.$var.F_A
+ done
+ cd $varResults/breedCluster
+ cp Bulldog_English.assoc.$var.F_A all.assoc.$var.F_A
+ for breed in Pug Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do echo $breed;
+  join all.assoc.$var.F_A ${breed}.assoc.$var.F_A > temp
+  mv temp all.assoc.$var.F_A
+ done
+ grep -v "NA" all.assoc.$var.F_A > all.assoc.$var.F_A.noNA
+ head -n1 all.assoc.$var.F_A.noNA > all.assoc.$var.F_A.noNA.exp
+ awk '{if($2+$3+$4+$5+$6+$7+$8+$9+$10+$11 > 0)print;}' all.assoc.$var.F_A.noNA >> all.assoc.$var.F_A.noNA.exp
+ Rscript -e 'args=(commandArgs(TRUE)); data=read.table(args[1],header=T);mat_data <- data.matrix(data[,2:11]);rownames(mat_data)=data$Location;'\
+'d_Data <- dist(t(mat_data));hcData <- hclust(d_Data);'\
+'outputPDF=paste(args[1],"cluster","pdf",sep=".");pdf(outputPDF);plot(hcData);dev.off();' all.assoc.$var.F_A.noNA.exp
+done
+
+cp all.assoc.snps.F_A.noNA.exp all.assoc.var.F_A.noNA.exp
+tail -n+2 all.assoc.indels.F_A.noNA.exp >> all.assoc.var.F_A.noNA.exp
+Rscript -e 'args=(commandArgs(TRUE)); data=read.table(args[1],header=T);mat_data <- data.matrix(data[,2:11]);rownames(mat_data)=data$Location;'\
+'d_Data <- dist(t(mat_data));hcData <- hclust(d_Data);'\
+'outputPDF=paste(args[1],"cluster","pdf",sep=".");pdf(outputPDF);plot(hcData);dev.off();' all.assoc.var.F_A.noNA.exp
 
 
-for SRA in SRR2095503.sra; do
- echo $SRA
- qsub -v inputSRA=$SRA ${script_path}/fastq-dump.sh
- #fastq-dump --split-files --gzip $SRA
-done;
+###########################
+## multi-breed association
+cd $varResults/breedCluster
+for var in snps indels;do
+ python $script_path/tamer_filter.py --upper_threshold=0.85 --lower_threshold=0.1 --upper_count=2 --header_lines=1 --delimiter=" " all.assoc.$var.F_A > all.assoc.$var.F_A.multiBr
+ path="$varResults/breedSp/$var";
+ for annDB in ENS NCBI;do echo $annDB;
+  qsub -v VCF_info="$path/VCF_info",assocTable="all.assoc.$var.F_A.multiBr",varEffect="$path/$annDB.varEffect.txt",TransInfo="$breedSp/${annDB}_TransInfo.txt",suffix="${annDB}.ann" $script_path/annotatMultiPlink.sh
+ done
+done
+## filter
+cd $varResults/breedCluster
+for var in snps indels;do echo $var;
+  for annDB in ENS NCBI;do echo $annDB;
+   annFile="all.assoc.$var.F_A.multiBr.$annDB.ann";
+   #head -n1 $annFile > header
+   #(cat header && awk '{if($21=="Transcript")print;}' $annFile) > $annFile.trans
+   grep -v "IMPACT=MODIFIER" $annFile > $annFile.impact
+done;done
+## get VCF
+module load bcftools/1.2
+cd $varResults/breedCluster
+for var in snps indels;do echo $var;
+  for annDB in ENS NCBI;do echo $annDB;
+   target="all.assoc.$var.F_A.multiBr.$annDB.ann.impact";
+   tail -n+2 $target | awk 'BEGIN{FS=OFS="\t";}{print $3,$4}' | sort | uniq > $var.$annDB.target_list
+   pathToVCF=varResults_$var;vcfFile_gz=$(ls ${!pathToVCF}/GenotypeGVCFs_output_max50.raw_*.vcf.gz);  ## include overlapping indels 
+   bcftools view -Ov -o $target.vcf_temp -R $var.$annDB.target_list $vcfFile_gz;
+   grep -v "^##" $target.vcf_temp > $target.vcf; rm $target.vcf_temp;
+   echo "$target.vcf" "done";
+done;done
+rsync -a --prune-empty-dirs --include '*/' --include '*.ann.impact.vcf' --exclude '*' . ~/temp/breedSp/multiBreed/.
 
+## check for annotation concordance 
+for var in snps indels;do
+ for annDB in ENS NCBI;do
+  awk -F"\t" '{if($21=="Transcript")print $2;}' all.assoc.$var.F_A.multiBr.${annDB}.ann | sort | uniq > $var.$annDB.Transcript
+  grep -v "IMPACT=MODIFIER" all.assoc.$var.F_A.multiBr.${annDB}.ann | awk -F"\t" '{print $2;}' | sort | uniq > $var.$annDB.impact
+ done; 
+echo $(wc -l $var.ENS.Transcript) $(wc -l $var.NCBI.Transcript) $(comm -12 $var.ENS.Transcript $var.NCBI.Transcript | awk '{print $3}' | wc -l) 
+echo $(wc -l $var.ENS.impact) $(wc -l $var.NCBI.impact) $(comm -12 $var.ENS.impact $var.NCBI.impact | awk '{print $3}' | wc -l) 
+rm $var.*.Transcript $var.*.impact; 
+done > concordance.report
+################
+## single gene search
+cd $varResults
+mkdir geneSp
+gene="MC1R" ## "SLC2A9" ## "TYRP1" ## "MITF" ## "CBD103"
+id=$(grep $gene breedSp/NCBI_TransInfo.txt | head -n1 | awk -F"\t" '{print $1}' | grep -Fwf - breedSp/snps/NCBI.varEffect.txt | head -n1 | awk -F"\t" '{print $4}')
+awk -F"\t" -v id=$id '{if($4==id)print;}' breedSp/snps/NCBI.varEffect.txt | grep -v "IMPACT=MODIFIER" > geneSp/$gene.snps.NCBI.varEffect
+awk -F"\t" -v id=$id '{if($4==id)print;}' breedSp/indels/NCBI.varEffect.txt | grep -v "IMPACT=MODIFIER" > geneSp/$gene.indels.NCBI.varEffect
+grep $gene breedSp/indels/*/*.NCBI.ann.trans | grep -v "IMPACT=MODIFIER" > geneSp/$gene.indels.NCBI.ann.trans
+grep $gene breedSp/snps/*/*.NCBI.ann.trans | grep -v "IMPACT=MODIFIER" > geneSp/$gene.snps.NCBI.ann.trans
+#grep $gene breedSp/{snps,indels}/*/*.NCBI.ann.trans | grep -v "IMPACT=MODIFIER" > geneSp/$gene.var.NCBI.ann.trans
+awk -F"\t" -v id=$id '{if($4==id)print;}' breedSp/snps/NCBI.varEffect.txt | grep "IMPACT=MODIFIER" > geneSp/$gene.modifier.snps.NCBI.varEffect
+awk -F"\t" -v id=$id '{if($4==id)print;}' breedSp/indels/NCBI.varEffect.txt | grep "IMPACT=MODIFIER" > geneSp/$gene.modifier.indels.NCBI.varEffect
+grep $gene breedSp/indels/*/*.NCBI.ann | grep "IMPACT=MODIFIER" > geneSp/$gene.modifier.indels.NCBI.ann
+grep $gene breedSp/snps/*/*.NCBI.ann | grep "IMPACT=MODIFIER" > geneSp/$gene.modifier.snps.NCBI.ann
+#grep $gene breedSp/{snps,indels}/*/*.NCBI.ann | grep "IMPACT=MODIFIER" > geneSp/$gene.modifier.var.NCBI.ann
+
+cd $varResults/geneSp
+module load bcftools/1.2
+for var in snps indels;do echo $var;
+# for gene in MC1R;do echo $gene
+# for gene in SLC2A9;do echo $gene
+# for gene in TYRP1;do echo $gene
+# for gene in MITF;do echo $gene
+ for gene in CBD103;do echo $gene
+  for annDB in NCBI;do echo $annDB;
+   target=$gene.$var.$annDB.varEffect ## $gene.modifier.$var.NCBI.varEffect
+   cat $target | awk 'BEGIN{FS="[\t:]";OFS="\t"}{print "chr"$2,$3}' | sort | uniq > $gene.$var.$annDB.target_list
+   pathToVCF=varResults_$var;vcfFile_gz=$(ls ${!pathToVCF}/GenotypeGVCFs_output_max50.raw_*.vcf.gz);  ## include overlapping indels
+   bcftools view -Ov -o $target.vcf_temp -R $gene.$var.$annDB.target_list $vcfFile_gz;
+   grep -v "^##" $target.vcf_temp > $target.vcf; rm $target.vcf_temp; rm $gene.$var.$annDB.target_list;
+   echo "$target.vcf" "done";
+done;done;done
+#################
+## genome error
+for var in snps indels;do
+ control="ALL";breed="Boxer";path="$varResults/breedSp/$var";
+ cd $path/$breed.vs.$control
+ rm *.onegroup*
+ head -n1 ${breed}_vs_${control}.complete.genoCor | awk 'BEGIN{OFS="\t";}{print $1,"ALT_frq","het_freq","REF_freq";}' > $var.onegroup
+ tail -n+2 ${breed}_vs_${control}.complete.genoCor | awk 'BEGIN{OFS="\t";}{if(($7+$10)==0)print $1,$5+$8,$6+$9,$7+$10;}' >> $var.onegroup
+ Rscript -e 'args=(commandArgs(TRUE));data1=read.delim(args[1]);data2=read.delim(args[2]);dataMerge=merge(data1,data2,by="Location",all.x=F,all.y=T);'\
+'data1=read.delim(args[3]);dataMerge=merge(dataMerge,data1,by="Location",all.x=T,all.y=F);'\
+'data1=read.delim(args[4],quote="");dataMerge=merge(dataMerge,data1,by.x="Gene",by.y="Ensembl.Gene.ID",all.x=T,all.y=F);'\
+'write.table(dataMerge[,c(2:10,1,13:20,22:25)],paste(args[2],"ann",sep="."), sep="\t", quote=F, row.names=F, col.names=T);' $path/VCF_info $var.onegroup $path/varEffect.txt $breedSp/dogEnsembl_GeneInfo_noEmpty_reduced2.txt
+ head -n1 $var.onegroup.ann > $var.onegroup.ann.err
+ tail -n+2 $var.onegroup.ann | awk 'BEGIN{FS=OFS="\t";}{if($8==0)print;}' >> $var.onegroup.ann.err
+ tail -n+2 $var.onegroup.ann.err | wc -l  ## 267723 // 98355
+ grep "IMPACT=HIGH" $var.onegroup.ann.err | wc -l  ## 261 // 4460
+ grep "IMPACT=MODERATE" $var.onegroup.ann.err | wc -l  ## 1397 // 114
+done
+##########################
+# database
+mkdir -p $breedSp/database && cd $breedSp/database
+
+## assocTable
+echo -e "Breed\tVar_type\tLocation\tF_A\tF_U\tFDR\tAFF_ALT\tAFF_het\tAFF_REF\tUNAFF_ALT\tUNAFF_het\tUNAFF_REF" > assocTable
+for var in snps indels;do
+ path="$varResults/breedSp/$var";
+ for breed in Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet Pug;do echo $breed;
+  tab=$path/$breed.vs.$control/${breed}_vs_${control}.complete.genoCor.fdrCor
+  tail -n+2 $tab | awk -v breed=$breed -v var=$var 'BEGIN{FS=OFS="\t";}{print breed,var,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10;}' >> assocTable
+ done
+done
+echo "Location" > assocTable_loc
+tail -n+2 assocTable | awk 'BEGIN{FS="\t";}{print $3}' | sort | uniq >> assocTable_loc
+
+## varEffect.txt
+echo -e "annDB\tLocation\tGene\tFeature\tFeature_type\tConsequence\tcDNA_position\tCDS_position\tProtein_position\tAmino_acids\tCodons\tExtra" > varEffect.txt
+for var in snps indels;do
+ path="$varResults/breedSp/$var";
+ tail -n+2 $path/ENS.varEffect.txt | awk 'BEGIN{FS=OFS="\t";}{print "Ensembl",$2,$4,$5,$6,$7,$8,$9,$10,$11,$12,$14;}' >> varEffect.txt
+ tail -n+2 $path/NCBI.varEffect.txt | awk 'BEGIN{FS=OFS="\t";}{print "NCBI",$2,$4,$5,$6,$7,$8,$9,$10,$11,$12,$14;}' >> varEffect.txt
+done
+Rscript -e 'args=(commandArgs(TRUE));data1=read.delim(args[1]);data2=read.delim(args[2]);dataMerge=merge(data1,data2,by="Location",all.x=T,all.y=F);'\
+'write.table(dataMerge,paste(args[2],"sel",sep="."), sep="\t", quote=F, row.names=F, col.names=T);' assocTable_loc varEffect.txt
+
+## VCF_info
+echo -e "Location\tCHROM\tPOS\tID\tREF\tALT" > VCF_info
+for var in snps indels;do
+ path="$varResults/breedSp/$var";
+ tail -n+2 $path/VCF_info | awk 'BEGIN{FS=OFS="\t";}{print $1,$2,$3,$4,$5,$6;}' >> VCF_info
+done
+Rscript -e 'args=(commandArgs(TRUE));data1=read.delim(args[1]);data2=read.delim(args[2]);dataMerge=merge(data1,data2,by="Location",all.x=T,all.y=F);'\
+'write.table(dataMerge,paste(args[2],"sel",sep="."), sep="\t", quote=F, row.names=F, col.names=T);' assocTable_loc VCF_info
+
+## TransInfo.txt
+echo -e "Transcript_ID\tGene_Name\tGene_biotype\tDescription" > TransInfo.txt
+for annDB in ENS NCBI;do
+ tail -n+2 $breedSp/${annDB}_TransInfo.txt >> TransInfo.txt
+ #tail -n+2 $breedSp/$(annDB)_TransInfo.txt | awk 'BEGIN{FS=OFS="\t";}{print $1,$2,$3,$4,$5,$6;}' >> TransInfo.txt
+done
+echo "Transcript_ID" > varEffect_trans
+#tail -n+2 varEffect.txt | awk -F "\t" '{print $4}' | grep -v "-" | sort | uniq >> varEffect_trans
+#Rscript -e 'args=(commandArgs(TRUE));data1=read.delim(args[1]);data2=read.delim(args[2]);dataMerge=merge(data1,data2,by="Transcript_ID",all.x=T,all.y=F);'\
+'write.table(dataMerge,paste(args[2],"sel",sep="."), sep="\t", quote=F, row.names=F, col.names=T);' varEffect_trans TransInfo.txt
+
+#########################
+## explor the distribution per chromosome
+var="snps"
+for breed in Bulldog Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner NSDTR Golden_Retriever;do
+ cd $varResults/breedSp/$var/${breed}.vs.${control}
+ for chr in {1..5};do
+  #awk -v chr="$chr" '{if(($2==chr) && ($5>=0.75 || $5<=0.25))print $3;}' ${breed}_vs_${control}.complete.cor.sig > ${breed}_vs_${control}.hiFreq.position.chr$chr;
+  Rscript -e 'args=(commandArgs(TRUE)); data=read.table(args[1],header=F);'\
+'outputPDF=paste(args[1],"hist","pdf",sep=".");pdf(outputPDF);hist(data$V1);dev.off();'\
+'outputPDF=paste(args[1],"hist100","pdf",sep=".");pdf(outputPDF);hist(data$V1,breaks=100);dev.off();'\
+'outputPDF=paste(args[1],"hist1000","pdf",sep=".");pdf(outputPDF);hist(data$V1,breaks=1000);dev.off();'\
+'outputPDF=paste(args[1],"hist10000","pdf",sep=".");pdf(outputPDF);hist(data$V1,breaks=10000);dev.off();' ${breed}_vs_${control}.hiFreq.position.chr$chr;
+  #awk -v chr="$chr" '{if(($2==chr) && ($5==0 || $5==1))print $3;}' ${breed}_vs_${control}.complete.cor.sig > ${breed}_vs_${control}.singleHaplo.position.chr$chr;
+  #awk -v chr="$chr" '{if(($2==chr) && (($5==0 && $6==1) || ($5==1 && $6==0)))print $3;}' ${breed}_vs_${control}.complete.cor.sig > ${breed}_vs_${control}.exclusive.position.chr$chr;
+done;done
 #################
 ## reassemble the unmapped reads with mapped reads from suspcious regions
 sample="2202" ## sample="T582"
@@ -876,14 +1277,21 @@ cat unmapped/s2_pe unmapped/s2_pe_se > unmapped/unmapped_R2.fastq
 
 #######################
 mkdir $dogSeq/SV
-cp $workingdata/newSeq/bwa_align/bwa_2202/pe_aligned_reads.sorted.bam $dogSeq/SV/S1_2202.bam
-cp $workingdata/newSeq/bwa_align/bwa_T582/pe_aligned_reads.sorted.bam $dogSeq/SV/S2_T582.bam
-cp $workingdata/newSeq/bwa_align/bwa_T586/pe_aligned_reads.sorted.bam $dogSeq/SV/R1_T586.bam
-cp $workingdata/newSeq/bwa_align/bwa_1052/pe_aligned_reads.sorted.bam $dogSeq/SV/R2_1052.bam
-cp $workingdata/newSeq/bwa_align/bwa_5809/pe_aligned_reads.sorted.bam $dogSeq/SV/R3_5809.bam
-cp $workingdata/newSeq/bwa_align/bwa_5813/pe_aligned_reads.sorted.bam $dogSeq/SV/R4_5813.bam
-#cp $workingdata/newSeq/bwa_align/bwa_2239/pe_aligned_reads.bam $dogSeq/SV/R1_2239_pe_aligned_reads.bam
-#cp $workingdata/newSeq/bwa_align/bwa_T593/pe_aligned_reads.bam $dogSeq/SV/R3_T593_pe_aligned_reads.bam
+#cp $workingdata/newSeq/bwa_align/bwa_2202/pe_aligned_reads.sorted.bam $dogSeq/SV/S1_2202.bam
+#cp $workingdata/newSeq/bwa_align/bwa_T582/pe_aligned_reads.sorted.bam $dogSeq/SV/S2_T582.bam
+#cp $workingdata/newSeq/bwa_align/bwa_T586/pe_aligned_reads.sorted.bam $dogSeq/SV/R1_T586.bam
+#cp $workingdata/newSeq/bwa_align/bwa_1052/pe_aligned_reads.sorted.bam $dogSeq/SV/R2_1052.bam
+#cp $workingdata/newSeq/bwa_align/bwa_5809/pe_aligned_reads.sorted.bam $dogSeq/SV/R3_5809.bam
+#cp $workingdata/newSeq/bwa_align/bwa_5813/pe_aligned_reads.sorted.bam $dogSeq/SV/R4_5813.bam
+##cp $workingdata/newSeq/bwa_align/bwa_2239/pe_aligned_reads.bam $dogSeq/SV/R1_2239_pe_aligned_reads.bam
+##cp $workingdata/newSeq/bwa_align/bwa_T593/pe_aligned_reads.bam $dogSeq/SV/R3_T593_pe_aligned_reads.bam
+
+cp $workingdata/newSeq/bwa_align/bwa_2202/pe_aligned_reads.bam $dogSeq/SV/S1_2202.bam
+cp $workingdata/newSeq/bwa_align/bwa_T582/pe_aligned_reads.bam $dogSeq/SV/S2_T582.bam
+cp $workingdata/newSeq/bwa_align/bwa_T586/pe_aligned_reads.bam $dogSeq/SV/R1_T586.bam
+cp $workingdata/newSeq/bwa_align/bwa_1052/pe_aligned_reads.bam $dogSeq/SV/R2_1052.bam
+cp $workingdata/newSeq/bwa_align/bwa_5809/pe_aligned_reads.bam $dogSeq/SV/R3_5809.bam
+cp $workingdata/newSeq/bwa_align/bwa_5813/pe_aligned_reads.bam $dogSeq/SV/R4_5813.bam
 
 module load SVDetect/0.8b
 module load SAMTools/1.0
@@ -900,7 +1308,7 @@ for label in S1_2202 S2_T582 R1_T586 R2_1052 R3_5809 R4_5813;do
  SVDetect linking filtering -conf $label.sv.conf
  #Visualization in UCSC
  SVDetect links2bed -conf $label.sv.conf
- #create a sample report
+e#create a sample report
  SVDetect links2SV -conf $label.sv.conf
 done
 
@@ -919,7 +1327,7 @@ sed -i "s|^bed_output=.*$|bed_output=0|" S1_2202.sv.conf
 sed -i "s|^list_samples=.*$|list_samples=S1_2202,R2_1052|" S1_2202.sv.conf
 sed -i "s|^list_read_lengths=.*$|list_read_lengths=100-100,100-100|" S1_2202.sv.conf
 sed -i "s|^file_suffix=.*$|file_suffix=.Name_sorted.ab.bam.intra.links.filtered|" S1_2202.sv.conf
-SVDetect links2compare -conf S1_2202.sv.conf &> log2
+SVDetect links2compare -conf S1_2202.sv.conf &> log
 mkdir comp_S1_2202vsR2_1052
 mv SVDetect_results/*.compared* comp_S1_2202vsR2_1052/.
 
@@ -940,12 +1348,12 @@ mv SVDetect_results/*.compared* comp_S1_2202vsS2_T582_A/.
 ## repeat the Comparison of each test vs another control
 sed -i "s|^list_samples=.*$|list_samples=S1_2202,R3_5809|" S1_2202.sv.conf
 sed -i "s|^file_suffix=.*$|file_suffix=.Name_sorted.ab.bam.intra.links.filtered|" S1_2202.sv.conf
-SVDetect links2compare -conf S1_2202.sv.conf &> log2
+SVDetect links2compare -conf S1_2202.sv.conf &> log4
 mkdir comp_S1_2202vsR3_5809
 mv SVDetect_results/*.compared* comp_S1_2202vsR3_5809/.
 
 sed -i "s|^list_samples=.*$|list_samples=S2_T582,R4_5813|" S1_2202.sv.conf
-SVDetect links2compare -conf S1_2202.sv.conf &> log2
+SVDetect links2compare -conf S1_2202.sv.conf &> log5
 mkdir comp_S2_T582vsR4_5813
 mv SVDetect_results/*.compared* comp_S2_T582vsR4_5813/.
 
@@ -954,7 +1362,7 @@ sed -i "s|^list_samples=.*$|list_samples=S1_2202,S2_T582|" S1_2202.sv.conf
 sed -i "s|^file_suffix=.*$|file_suffix=.Name_sorted.ab.bam.intra.links.filtered.compared|" S1_2202.sv.conf
 cp comp_S1_2202vsR3_5809/S1_2202.Name_sorted.ab.bam.intra.links.filtered.compared SVDetect_results/.
 cp comp_S2_T582vsR4_5813/S2_T582.Name_sorted.ab.bam.intra.links.filtered.compared SVDetect_results/.
-SVDetect links2compare -conf S1_2202.sv.conf &> log3
+SVDetect links2compare -conf S1_2202.sv.conf &> log6
 mkdir comp_S1_2202vsS2_T582_B
 mv SVDetect_results/*.compared* comp_S1_2202vsS2_T582_B/.
 
@@ -963,7 +1371,7 @@ sed -i "s|^list_samples=.*$|list_samples=compA,compB|" S1_2202.sv.conf
 sed -i "s|^file_suffix=.*$|file_suffix=.Name_sorted.ab.bam.intra.links.filtered.compared.compared|" S1_2202.sv.conf
 cp comp_S1_2202vsS2_T582_A/S1_2202.S2_T582.Name_sorted.ab.bam.intra.links.filtered.compared.compared SVDetect_results/compA.Name_sorted.ab.bam.intra.links.filtered.compared.compared
 cp comp_S1_2202vsS2_T582_B/S1_2202.S2_T582.Name_sorted.ab.bam.intra.links.filtered.compared.compared SVDetect_results/compB.Name_sorted.ab.bam.intra.links.filtered.compared.compared
-SVDetect links2compare -conf S1_2202.sv.conf &> log4
+SVDetect links2compare -conf S1_2202.sv.conf &> log7
 mkdir comp_S1_2202vsS2_T582_final
 mv SVDetect_results/*.compared* comp_S1_2202vsS2_T582_final/.
 
@@ -978,3 +1386,8 @@ for sample in S1_2202 S2_T582 R1_T586 R2_1052 R3_5809 R4_5813;do
  samtools index $sample.$region.bam
 done
 cp *.$region.bam* ~/temp/.   
+
+
+###
+rsync -a --prune-empty-dirs --include '*/' --include '*.ann.genoDif.trans.Hi' --exclude '*' breedSp ~/temp/.
+
