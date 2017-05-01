@@ -719,14 +719,46 @@ for var in SNPs INDELs;do
  mkdir -p $varResults/${var}_NCBI.varEffect && cd $varResults/${var}_NCBI.varEffect;
  qsub -v vcf="$varResults/GenotypeGVCFs_output_max50.raw_$var.vcf" ${script_path}/vep_ncbi.sh;
 done
+
+## prepare the variation effect file (VCF dependent)
+## Notes: Current code does not work for multi-allelic indel variants
+breedSp="$varResults/breedSp"
+mkdir -p $breedSp/{snps,indels}
+for annDB in "ENS" "NCBI";do #echo $annDB;done
+ ## SNPs: remove hashed lines and fix the header to be readable 
+ cd $varResults/SNPs_$annDB.varEffect;
+ grep -v "^##" variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > $breedSp/snps/$annDB.varEffect.txt;
+ ## indels: remove hashed lines, fix the header to be readable, and adjust the location coordinates
+ cd $varResults/INDELs_$annDB.varEffect;
+ #grep -v "^##" variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > tempVarEff.txt
+ #tail -n+2 tempVarEff.txt | awk 'BEGIN{FS="\t";}{print $1;}' > tempVarEff2.txt; sed -i 's/^Un_/Un-/' tempVarEff2.txt;
+ #echo "Location" > tempVarEff3.txt
+ #awk 'BEGIN{FS="_";}{print $1":"$2-1;}' tempVarEff2.txt >> tempVarEff3.txt; sed -i 's/^Un-/Un_/' tempVarEff3.txt;
+ #paste tempVarEff3.txt tempVarEff.txt | awk 'BEGIN{FS="\t";OFS="\t"}{print $2,$1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15;}' > $breedSp/indels/$annDB.varEffect.txt2
+ #rm tempVarEff*.txt
+ grep -v "^##" variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > tempVarEff.txt
+ echo "Location" > tempVarEff2.txt;
+ grep -v "^#" variant_effect_output.txt | awk 'BEGIN{FS="[\t:]";}{split($3,a,"-");if($4=="-"){print $2":"a[1]-1}else{print $2":"a[1]}}' >> tempVarEff2.txt;
+ paste tempVarEff2.txt tempVarEff.txt | awk 'BEGIN{FS="\t";OFS="\t"}{print $2,$1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15;}' > $breedSp/indels/$annDB.varEffect.txt
+ rm tempVarEff*.txt
+ ## pusdo codo to consider multi-allelic variants.
+ # read indels VCF file to define multi-allelic variants and save them in format matching 1st column of VEP variant_effect_output.txt >  dup_ids
+ # cat dup_ids | grep -v -Fwf - variant_effect_output.txt > variant_effect_output_noDup.txt
+ #vgrep -v "^##" variant_effect_output_noDup.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > tempVarEff.txt
+done
+
+## "new" merge snps and indels variation effect files (instead of re-runing the annotation and preparation (see MFM project for one step protocol)
+cd $breedSp
+for annDB in "ENS" "NCBI";do #echo $annDB;done
+ cat snps/$annDB.varEffect.txt > $annDB.varEffect.txt;
+ tail -n+2 indels/$annDB.varEffect.txt >> $annDB.varEffect.txt;
+done
 ##########################
 ## breed specific varaints:
 snps="GenotypeGVCFs_output_max50.pass_snps"  
 indels="GenotypeGVCFs_output_max50.pass_indels"
 
-mkdir -p breedSp/{snps,indels}
-breedSp="$varResults/breedSp"
-## prepare VCF files for analysis
+## a) prepare VCF files for analysis
 ## SNPs: remove chrUn from VCF 
 grep -v "^chrUn_" $snps.vcf > $breedSp/snps/$snps.NochrUn.vcf
 ## INDELS: select monoalleleic indels, replace with uniq character,and remove chrUn from VCF 
@@ -734,14 +766,40 @@ awk '/#/{print;next}{if($5 !~ /,/){print}}' $indels.vcf > $breedSp/indels/$indel
 awk 'BEGIN{FS="\t";OFS="\t"}/#/{print;next}{if(length($4)>1){$4="U"};if(length($5)>1){$5="U"};print;}' $breedSp/indels/$indels.monoAllel.vcf > $breedSp/indels/$indels.monoAllel_edit.vcf
 grep -v "^chrUn_" $breedSp/indels/$indels.monoAllel_edit.vcf > $breedSp/indels/$indels.NochrUn.vcf
 
-module load vcftools/0.1.14
+## b) prepare Plink input & create binary inputs
+modu leloai vcftools/0.1.14
 module load plink/1.9
 for var in snps indels;do
  cd $breedSp/$var
  ## prepare Plink input
  vcftools --vcf ${!var}.NochrUn.vcf --plink --out ${!var}.NochrUn
- ## create binary inputs
+ ## create binary inpuis
  plink --file ${!var}.NochrUn --allow-no-sex --dog --make-bed --out ${!var}.NochrUn.binary
+ ### create covariant file "it is the same for both snps and indels but I am creating 2 for simplicity"
+ #plink --bfile ${!var}.NochrUn.binary --covar $breedSp/dog_breeds_all_rawCov --write-covar --dummy-coding --dog --out dog_breeds # dog_breeds_all_rawCov is created from dog_breeds_all where breeds id are replaced by binary representation
+done
+
+## b) "new" prepare Plink input & create binary inpuis & create file of alternative alleles
+cd $breedSp
+## merge filtered SNPs and indels in the fake snp format
+module load vcftools/0.1.14
+vcf-concat $breedSp/snps/$snps.NochrUn.vcf $breedSp/indels/$indels.NochrUn.vcf | vcf-sort > allSnp.vcf
+## prepare Plink input
+vcftools --vcf allSnp.vcf --plink --out allSnp
+## create binary inputs
+module load plink/1.9
+plink --file allSnp --allow-no-sex --dog --make-bed --out allSnp.binary
+## create file of alternative alleles 
+cat allSnp.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{{if($3==".")$3=$1":"$2;}print $3,$5;}'  > alt_alleles
+
+## c) "new" prepare Plink input for protein coding variants only
+cd $breedSp
+for annDB in "ENS" "NCBI";do #echo $annDB;done
+ tail -n+2 $annDB.varEffect.txt | grep -v "IMPACT=MODIFIER" | awk -F"[\t:]" 'BEGIN{OFS="\t"}{print "chr"$2,$3}' > $annDB.varEffect_coding.txt;
+ vcftools --vcf allSnp.vcf --out allSnp_$annDB.coding --recode --positions $annDB.varEffect_coding.txt ## kept 194479
+ vcftools --vcf allSnp_$annDB.coding.recode.vcf --plink --out allSnp_$annDB.coding
+ plink --file allSnp_$annDB.coding --allow-no-sex --dog --make-bed --out allSnp_$annDB.coding.binary
+ cat allSnp_$annDB.coding.recode.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{{if($3==".")$3=$1":"$2;}print $3,$5;}'  > alt_alleles_$annDB.coding
 done
 
 ##########################
@@ -815,6 +873,13 @@ grep "^--het" *.log > het_scan.txt
 head -n1 Boxer.het > het.txt
 for f in *.het;do tail -n+2 $f >> het.txt;done
 #########################
+## prepare the VCF_info tables (VCF dependent) : required for running the breedSp_plink.sh script and for subsequent annotation
+for var in snps indels;do
+ cd $breedSp/$var
+ echo -e "Location\tCHROM\tPOS\tID\tREF\tALT" > VCF_info
+ grep -v "^chrUn_" $varResults/${!var}.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{print substr($1,4)":"$2,$1,$2,$3,$4,$5}' >> VCF_info
+done
+
 ## start the breed specific analysis
 for var in snps indels;do
  path="$breedSp/$var";
@@ -846,43 +911,106 @@ for var in snps indels;do
  qsub -v path="$path",binary="$binary",breed="HOD",control="ALL",breed_list="dog_breeds_HOD" $script_path/breedSp_plink.sh
  qsub -v path="$path",binary="$binary",breed="CED",control="ALL",breed_list="dog_breeds_CED" $script_path/breedSp_plink.sh
 
+ qsub -v path="$path",binary="$binary",breed="screwTail",control="ALL",breed_list="dog_breeds_screwTail" $script_path/breedSp_plink.sh
+
  #qsub -v path="$path",binary="$binary",breed="Golden_Retriever",control="labrador_retriever",breed_list="dog_breeds_Labs_golden" $script_path/breedSp_plink.sh
  #qsub -v path="$path",binary="$binary",breed="Golden_Retriever",control="Boxer",breed_list="dog_breeds_Boxer_golden" $script_path/breedSp_plink.sh
 done
+
+## "new" phenotype (or breed) specific analysis
+qsub -v binary="allSnp.binary",pheno="Brachy",control="control",pheno_list="dog_breeds_brachy",geno="0.5",maf="0.01",ref="alt_alleles",species="dog",map="allSnp.map" $script_path/run_plink.sh
+qsub -v binary="allSnp_$annDB.coding.binary",pheno="Brachy",control="control_cod",pheno_list="dog_breeds_brachy",geno="0.5",maf="0.01",ref="alt_alleles_$annDB.coding",species="dog",map="allSnp.map" $script_path/run_plink.sh
+
+qsub -v binary="allSnp.binary",pheno="screwTail",control="control",pheno_list="dog_breeds_screwTail",geno="0.5",maf="0.05",ref="alt_alleles",species="dog",map="allSnp.map" $script_path/run_plink.sh
+qsub -v binary="allSnp_$annDB.coding.binary",pheno="screwTail",control="control_cod",pheno_list="dog_breeds_screwTail",geno="0.5",maf="0.01",ref="alt_alleles_$annDB.coding",species="dog",map="allSnp.map" $script_path/run_plink.sh
+
+## "new" filter out the non-fixed alleles
+cd $breedSp
+for z in {1..39};do echo $z:1 1 1 1 1 1 fake.$z $z 1;done > fake_set
+while read pheno control;do echo $pheno.vs.$control;
+ cd $breedSp/$pheno.vs.$control;assocAdjFile=$pheno.vs.$control.asc.assoc.adjusted.loc; completeFile=$pheno.vs.$control.complete.genoCor.fdrCor;
+ (head -n1 $completeFile && awk 'BEGIN{IFS=OFS="\t"}{if(($2-$3)>0.9 || ($3-$2)>0.9)print;}' $completeFile) > $completeFile.fixed
+ awk '{print $1}' $completeFile.fixed | grep -Fwf - $assocAdjFile > $assocAdjFile.sel
+ cat $assocAdjFile.sel $breedSp/fake_set > $assocAdjFile.sel2
+done < experiments.list
+##########################
+## "new" visualization of GWAS results
+module load R/3.0.1
+Rscript -e "install.packages('qqman', lib='~/R/v3.0.1/library', contriburl=contrib.url('http://cran.r-project.org/'))"
+
+cd $breedSp
+while read pheno control;do echo $pheno.vs.$control;
+ cd $breedSp/$pheno.vs.$control
+ #### Association
+ assocFile=$pheno.vs.$control.asc.assoc
+ ## qq plots
+ qsub -v input=$assocFile.adjusted $script_path/qqPlot.sh
+ ## manhattan
+ unad_cutoff_sug=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.05' | head -n1 | awk '{print $3}')
+ unad_cutoff_conf=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.01' | head -n1 | awk '{print $3}')
+ #qsub -v input=$assocFile,sug=$unad_cutoff_sug,conf=$unad_cutoff_conf $script_path/manhattan.sh
+ qsub -v input=$assocFile,p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc_MAF0.05_unadj" $unad_cutoff_conf $script_path/manhattan_v2.sh
+  
+ unad_cutoff_sug=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.05' | head -n1 | awk '{print $4}')
+ unad_cutoff_conf=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.01' | head -n1 | awk '{print $4}')
+ qsub -v input=$assocFile.adjusted.loc,p_val="GC",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc_MAF0.05_GC" $script_path/manhattan_v2.sh
+ qsub -v input=$assocFile.adjusted.loc.sel2,p_val="GC",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc_MAF0.05_GC_fixed" $script_path/manhattan_v2.sh
+
+ #### Missingness
+ missingnessFile=$pheno.vs.$control.mis.missing
+ ## qq plots
+ qsub -v input=$missingnessFile.adjusted $script_path/qqPlot.sh
+ ## manhattan
+ unad_cutoff_sug=$(tail -n+2 $missingnessFile.adjusted | awk '$9>=0.05' | head -n1 | awk '{print $3}')
+ unad_cutoff_conf=$(tail -n+2 $missingnessFile.adjusted | awk '$9>=0.01' | head -n1 | awk '{print $3}')
+ #qsub -v input=$missingnessFile.adjusted.loc,sug=$unad_cutoff_sug,conf=$unad_cutoff_conf $script_path/manhattan.sh
+ qsub -v input=$missingnessFile.adjusted.loc,p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Mis_unadj" $script_path/manhattan_v2.sh
+done < experiments.list
+cd $breedSp
+rsync -a --prune-empty-dirs --include '*/' --include '*.bmp' --exclude '*' . ~/temp/.
+
+## visualization of single chromosomes ## make a file "peakChr.list" with the no of target chromosomes in the folder of the target analysis 
+cd $breedSp
+while read pheno control;do echo $pheno.vs.$control;
+ cd $breedSp/$pheno.vs.$control
+ #### Association
+ assocFile=$pheno.vs.$control.asc.assoc
+ ## manhattan
+ unad_cutoff_sug=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.05' | head -n1 | awk '{print $4}')
+ unad_cutoff_conf=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.01' | head -n1 | awk '{print $4}')
+ qsub -v input=$assocFile.adjusted.loc,peakChr="peakChr.list",p_val="GC",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="asc" $script_path/manhattan_chr.sh;
+ qsub -v input=$assocFile.adjusted.loc.sel2,peakChr="peakChr.list",p_val="GC",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="asc.fixed" $script_path/manhattan_chr.sh;
+
+ #### Missingness
+ missingnessFile=$pheno.vs.$control.mis.missing
+ unad_cutoff_sug=$(tail -n+2 $missingnessFile.adjusted | awk '$9>=0.05' | head -n1 | awk '{print $3}')
+ unad_cutoff_conf=$(tail -n+2 $missingnessFile.adjusted | awk '$9>=0.01' | head -n1 | awk '{print $3}')
+ qsub -v input=$missingnessFile.adjusted.loc,peakChr="peakChr.list",p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="mis" $script_path/manhattan_chr.sh
+done < experiments.list
+
+## visualization of regions in single chromosomes ## make a file "peakChr2.list" with the no of target chromosomes in the folder of the target analysis 
+cd $breedSp
+while read pheno control;do echo $pheno.vs.$control;
+ cd $breedSp/$pheno.vs.$control
+ #### Association
+ assocFile=$pheno.vs.$control.asc.assoc
+ ## manhattan
+ unad_cutoff_sug=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.05' | head -n1 | awk '{print $4}')
+ unad_cutoff_conf=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.01' | head -n1 | awk '{print $4}')
+ #qsub -v input=$assocFile.adjusted.loc,peakChr="peakChr2.list",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="asc.reg" $script_path/manhattan_Region.sh;
+ qsub -v input=$assocFile.adjusted.loc.sel2,peakChr="peakChr2.list",p_val="GC",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="asc.fixed.reg" $script_path/manhattan_Region.sh;
+
+ #### Missingness
+ missingnessFile=$pheno.vs.$control.mis.missing
+ unad_cutoff_sug=$(tail -n+2 $missingnessFile.adjusted | awk '$9>=0.05' | head -n1 | awk '{print $3}')
+ unad_cutoff_conf=$(tail -n+2 $missingnessFile.adjusted | awk '$9>=0.01' | head -n1 | awk '{print $3}')
+ qsub -v input=$missingnessFile.adjusted.loc,peakChr="peakChr2.list",p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="mis.reg" $script_path/manhattan_Region.sh
+done < experiments.list
+
 ##########################
 ## Annotation
-## create the VCF_info tables (VCF dependent) 
-for var in snps indels;do
- cd $breedSp/$var
- echo -e "Location\tCHROM\tPOS\tID\tREF\tALT" > VCF_info
- grep -v "^chrUn_" $varResults/${!var}.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{print substr($1,4)":"$2,$1,$2,$3,$4,$5}' >> VCF_info
-done
-
-## prepare the variation effect file (VCF dependent)
-## Notes: Current code does not fir for multi-allelic indel variants
-for annDB in "ENS" "NCBI";do #echo $annDB;done
- ## SNPs: remove hashed lines and fix the header to be readable 
- cd $varResults/SNPs_$annDB.varEffect;
- grep -v "^##" variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > $breedSp/snps/$annDB.varEffect.txt;
- ## indels: remove hashed lines, fix the header to be readable, and adjust the location coordinates
- cd $varResults/INDELs_$annDB.varEffect;
- #grep -v "^##" variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > tempVarEff.txt
- #tail -n+2 tempVarEff.txt | awk 'BEGIN{FS="\t";}{print $1;}' > tempVarEff2.txt; sed -i 's/^Un_/Un-/' tempVarEff2.txt;
- #echo "Location" > tempVarEff3.txt
- #awk 'BEGIN{FS="_";}{print $1":"$2-1;}' tempVarEff2.txt >> tempVarEff3.txt; sed -i 's/^Un-/Un_/' tempVarEff3.txt;
- #paste tempVarEff3.txt tempVarEff.txt | awk 'BEGIN{FS="\t";OFS="\t"}{print $2,$1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15;}' > $breedSp/indels/$annDB.varEffect.txt2
- #rm tempVarEff*.txt
- grep -v "^##" variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > tempVarEff.txt
- echo "Location" > tempVarEff2.txt;
- grep -v "^#" variant_effect_output.txt | awk 'BEGIN{FS="[\t:]";}{split($3,a,"-");if($4=="-"){print $2":"a[1]-1}else{print $2":"a[1]}}' >> tempVarEff2.txt;
- paste tempVarEff2.txt tempVarEff.txt | awk 'BEGIN{FS="\t";OFS="\t"}{print $2,$1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15;}' > $breedSp/indels/$annDB.varEffect.txt
- rm tempVarEff*.txt
- ## pusdo codo to consider multi-allelic variants.
- # read indels VCF file to define multi-allelic variants and save them in format matching 1st column of VEP variant_effect_output.txt >  dup_ids
- # cat dup_ids | grep -v -Fwf - variant_effect_output.txt > variant_effect_output_noDup.txt
- #vgrep -v "^##" variant_effect_output_noDup.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > tempVarEff.txt
-done 
-
+## prepare the VCF_info tables (VCF dependent): Done alreay
+## prepare the variation effect file (VCF dependent): Done alreay
 ## Extended Annotation (More temp work in extAnn.sh) (VCF independent)
 cd $breedSp
 ## A) Extend ENSEMBL annotation:
@@ -900,11 +1028,13 @@ Rscript -e 'args=(commandArgs(TRUE));data1=read.delim(args[1],header=F);data2=re
 rm NCBI_TransInfo.temp.*
 sed -i 's/%2C/,/g' NCBI_TransInfo.txt; sed -i 's/%3B/;/g' NCBI_TransInfo.txt;
 
+## marge all annotation info
 control="ALL";
 for var in snps indels;do echo $var;
  path="$breedSp/$var";
  for annDB in ENS NCBI;do echo $annDB;
-  for breed in HOD CED;do echo $breed;
+  for breed in screwTail;do echo $breed;
+  #for breed in HOD CED;do echo $breed;
   #for breed in Red maskFixed maskReport Grizzle brindle tick tan brown;do echo $breed;
   #for breed in Brachy Hunting Smart;do echo $breed;
   #for breed in Pug Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do echo $breed;
@@ -913,11 +1043,62 @@ for var in snps indels;do echo $var;
   done
  done
 done
+
+
+## "New" Annotation
+## "New" prepare the VCF_info tables (VCF dependent)
+cd $breedSp
+echo -e "Location\tCHROM\tPOS\tID\tREF\tALT" > VCF_info
+cat allSnp.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{print substr($1,4)":"$2,$1,$2,$3,$4,$5}' >> VCF_info
+## "New" prepare the variation effect file (VCF dependent): Done alreay
+## Extended Annotation (More temp work in extAnn.sh) (VCF independent): No change from old versio
+## "New" marge all annotation info
+while read pheno control;do echo $pheno.vs.$control;
+ cd $breedSp/$pheno.vs.$control
+ for annDB in ENS NCBI;do echo $annDB;
+  qsub -v VCF_info="$breedSp/VCF_info",assocTable="${pheno}.vs.${control}.complete.genoCor.fdrCor",varEffect="$breedSp/$annDB.varEffect.txt",TransInfo="$breedSp/${annDB}_TransInfo.txt",suffix="${annDB}.ann" $script_path/annotat_ascPlink.sh
+  qsub -v VCF_info="$breedSp/VCF_info",assocTable="${pheno}.vs.${control}.complete.genoCor.fdrCor.fixed",varEffect="$breedSp/$annDB.varEffect.txt",TransInfo="$breedSp/${annDB}_TransInfo.txt",suffix="${annDB}.ann" $script_path/annotat_ascPlink.sh
+
+  qsub -v VCF_info="$breedSp/VCF_info",misTable="${pheno}.vs.${control}.mis.missing.fdrCor",varEffect="$breedSp/$annDB.varEffect.txt",TransInfo="$breedSp/${annDB}_TransInfo.txt",suffix="${annDB}.ann" $script_path/annotat_misPlink.sh
+ done
+done < experiments.list
+
+
+## sort annotated files
+while read pheno control;do echo $pheno.vs.$control;
+ ann_assocTable="${pheno}.vs.${control}.complete.genoCor.fdrCor.${annDB}.ann"
+ (head -n1 $ann_assocTable && tail -n+2 $ann_assocTable | sort -k9,9 -g ) > $ann_assocTable.sorted
+ (head -n1 $ann_assocTable && tail -n+2 $ann_assocTable.sorted | grep -v "IMPACT=MODIFIER" | grep -vw "synonymous_variant")  > $ann_assocTable.sorted.coding
+
+ ann_assocTable_fixed="${pheno}.vs.${control}.complete.genoCor.fdrCor.fixed.${annDB}.ann"
+ (head -n1 $ann_assocTable_fixed && tail -n+2 $ann_assocTable_fixed | sort -k9,9 -g ) > $ann_assocTable_fixed.sorted
+ (head -n1 $ann_assocTable_fixed && tail -n+2 $ann_assocTable_fixed.sorted | grep -v "IMPACT=MODIFIER" | grep -vw "synonymous_variant")  > $ann_assocTable_fixed.sorted.coding
+
+
+ ann_misTable="${pheno}.vs.${control}.mis.missing.fdrCor.${annDB}.ann"
+ (head -n1 $ann_misTable && tail -n+2 $ann_misTable | sort -k9,9 -g ) > $ann_misTable.sorted
+ (head -n1 $ann_misTable && tail -n+2 $ann_misTable.sorted | grep -v "IMPACT=MODIFIER" | grep -vw "synonymous_variant")  > $ann_misTable.sorted.coding
+done < $breedSp/experiments.list
+
+## specific chromosomes and specific region
+#grep "^1:" $ann_assocTable.sorted | awk '$3>55300000' | awk '$3<57200000' | grep -v "IMPACT=MODIFIER" | grep -v "IMPACT=LOW"  > asc.chr1.p1.scan
+while read pheno control;do echo $pheno.vs.$control;
+ while read chr start end;do
+  ann_assocTable_fixed="${pheno}.vs.${control}.complete.genoCor.fdrCor.fixed.${annDB}.ann"
+  head -n1 $ann_assocTable_fixed.sorted > "asc.chr$chr.$start.$end.ann.sorted"
+  grep "^$chr:" $ann_assocTable_fixed.sorted | awk -v start=$start '$3>start' | awk -v end=$end '$3<end'  >> "asc.chr$chr.$start.$end.ann.sorted"
+
+  ann_misTable="${pheno}.vs.${control}.mis.missing.fdrCor.${annDB}.ann"
+  head -n1 $ann_misTable.sorted > "mis.chr$chr.$start.$end.ann.sorted"
+  grep "^$chr:" $ann_misTable.sorted | awk -v start=$start '$3>start' | awk -v end=$end '$3<end' | awk '$9<0.05'  >> "mis.chr$chr.$start.$end.ann.sorted"
+ done < peakChr2.list
+done < $breedSp/experiments.list
 #########################
 ## filtration
 control="ALL";
 for var in snps indels;do echo $var;
  path="$varResults/breedSp/$var";
+ for breed in screwTail;do echo $breed;
  #for breed in HOD CED;do echo $breed;
  #for breed in Red maskFixed maskReport Grizzle brindle tick tan brown;do echo $breed;
  #for breed in Brachy Hunting Smart;do echo $breed;
@@ -942,6 +1123,9 @@ for var in snps indels;do echo $var;
   done
  done
 done
+cd $varResults
+rsync -a --prune-empty-dirs --include '*/' --include '*.ann.genoDif.trans.*' --exclude '*' breedSp ~/temp/.
+rsync -a --prune-empty-dirs --include '*/' --include '*.ann.sig' --exclude '*' breedSp ~/temp/.
 #########################
 ## create count statistics
 cd $varResults/breedSp
@@ -963,8 +1147,9 @@ module load bcftools/1.2
 control="ALL";
 for var in snps indels;do echo $var;
  path="$varResults/breedSp/$var";
+ for breed in screwTail;do echo $breed;
  #for breed in HOD CED;do echo $breed;
- for breed in Red maskFixed maskReport Grizzle brindle tick tan brown;do echo $breed;
+ #for breed in Red maskFixed maskReport Grizzle brindle tick tan brown;do echo $breed;
  #for breed in Brachy Hunting Smart;do echo $breed;
  #for breed in Pug Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do echo $breed;
   cd $path/$breed.vs.$control
@@ -987,6 +1172,43 @@ tr '\r' '\n' < $target > $target.unix
 tail -n+2 $target.unix | awk 'BEGIN{FS=OFS="\t";}{print $2,$3}' | sort | uniq > target_list
 pathToVCF=varResults_$var;vcfFile_gz=$(ls ${!pathToVCF}/GenotypeGVCFs_output_max50.raw_*.vcf.gz);  ## include overlapping indels 
 bcftools view -Ov -R target_list $vcfFile_gz | grep -v "^##" > $target.v2.vcf 
+
+## "new"
+cd $varResults
+module load tabix/0.2.6
+#bgzip GenotypeGVCFs_output_max50.vcf
+qsub -v f="GenotypeGVCFs_output_max50.vcf" ${script_path}/bgzipFiles.sh
+#tabix -p vcf GenotypeGVCFs_output_max50.vcf.gz
+qsub -v f="GenotypeGVCFs_output_max50.vcf.gz" ${script_path}/tabixFiles.sh
+
+module load bcftools/1.2
+while read pheno control;do echo $pheno.vs.$control;
+ cd $breedSp/${pheno}.vs.${control}
+ vcfFile_gz="$varResults/GenotypeGVCFs_output_max50.vcf.gz";
+ ann_assocTable="${pheno}.vs.${control}.complete.genoCor.fdrCor.fixed.${annDB}.ann"
+ target=$ann_assocTable.sorted.coding
+ tail -n+2 $target | awk 'BEGIN{FS=OFS="\t";}{print $2,$3}' | sort | uniq > $target.target_list
+ bcftools view -Ov -o $target.vcf_temp -R $target.target_list $vcfFile_gz;
+ grep -v "^##" $target.vcf_temp > $target.vcf; rm $target.vcf_temp $target.target_list;
+ echo "$target.vcf";
+done < $breedSp/experiments.list
+
+module load bcftools/1.2
+while read pheno control;do echo $pheno.vs.$control;
+ cd $breedSp/${pheno}.vs.${control}
+ vcfFile_gz="$varResults/GenotypeGVCFs_output_max50.vcf.gz";
+ while read chr start end;do
+  for suffix in asc mis;do
+   target="$suffix.chr$chr.$start.$end.ann.sorted"
+   tail -n+2 $target | awk 'BEGIN{FS=OFS="\t";}{print $2,$3}' | sort | uniq > $target.target_list
+   bcftools view -Ov -o $target.vcf_temp -R $target.target_list $vcfFile_gz;
+   grep -v "^##" $target.vcf_temp > $target.vcf; rm $target.vcf_temp $target.target_list;
+   echo "$target.vcf";
+  done
+ done < peakChr2.list
+done < $breedSp/experiments.list
+
+##########################
 
 ## Retriev BAM file for list of samples for a specific region
 module load SAMTools/0.1.19
@@ -1091,8 +1313,8 @@ done > concordance.report
 ################
 ## single gene search
 cd $varResults
-mkdir geneSp
-gene="MC1R" ## "SLC2A9" ## "TYRP1" ## "MITF" ## "CBD103"
+mkdir -p geneSp
+gene="MC1R" ## "SLC2A9" ## "TYRP1" ## "MITF" ## "CBD103" ## "MLPH"
 id=$(grep $gene breedSp/NCBI_TransInfo.txt | head -n1 | awk -F"\t" '{print $1}' | grep -Fwf - breedSp/snps/NCBI.varEffect.txt | head -n1 | awk -F"\t" '{print $4}')
 awk -F"\t" -v id=$id '{if($4==id)print;}' breedSp/snps/NCBI.varEffect.txt | grep -v "IMPACT=MODIFIER" > geneSp/$gene.snps.NCBI.varEffect
 awk -F"\t" -v id=$id '{if($4==id)print;}' breedSp/indels/NCBI.varEffect.txt | grep -v "IMPACT=MODIFIER" > geneSp/$gene.indels.NCBI.varEffect
@@ -1112,7 +1334,8 @@ for var in snps indels;do echo $var;
 # for gene in SLC2A9;do echo $gene
 # for gene in TYRP1;do echo $gene
 # for gene in MITF;do echo $gene
- for gene in CBD103;do echo $gene
+# for gene in CBD103;do echo $gene
+ for gene in MLPH;do echo $gene
   for annDB in NCBI;do echo $annDB;
    target=$gene.$var.$annDB.varEffect ## $gene.modifier.$var.NCBI.varEffect
    cat $target | awk 'BEGIN{FS="[\t:]";OFS="\t"}{print "chr"$2,$3}' | sort | uniq > $gene.$var.$annDB.target_list
@@ -1121,6 +1344,12 @@ for var in snps indels;do echo $var;
    grep -v "^##" $target.vcf_temp > $target.vcf; rm $target.vcf_temp; rm $gene.$var.$annDB.target_list;
    echo "$target.vcf" "done";
 done;done;done
+## getting region
+bcftools view -Ov -o target.vcf_temp -R target_list dogs.311.vars.flt.ann.vcf.gz;
+grep -v "^##" target.vcf_temp > target_var.vcf;
+bcftools view -Ov -o target.vcf_temp -r 37:18000000-22000000 dogs.311.vars.flt.ann.vcf.gz;
+grep -v "^##" target.vcf_temp > target.vcf;
+
 #################
 ## genome error
 for var in snps indels;do
@@ -1145,6 +1374,7 @@ mkdir -p $breedSp/database && cd $breedSp/database
 
 ## assocTable
 echo -e "Breed\tVar_type\tLocation\tF_A\tF_U\tFDR\tAFF_ALT\tAFF_het\tAFF_REF\tUNAFF_ALT\tUNAFF_het\tUNAFF_REF" > assocTable
+control="ALL";
 for var in snps indels;do
  path="$varResults/breedSp/$var";
  for breed in Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet Pug;do echo $breed;
@@ -1180,11 +1410,32 @@ for annDB in ENS NCBI;do
  tail -n+2 $breedSp/${annDB}_TransInfo.txt >> TransInfo.txt
  #tail -n+2 $breedSp/$(annDB)_TransInfo.txt | awk 'BEGIN{FS=OFS="\t";}{print $1,$2,$3,$4,$5,$6;}' >> TransInfo.txt
 done
-echo "Transcript_ID" > varEffect_trans
+#echo "Transcript_ID" > varEffect_trans
 #tail -n+2 varEffect.txt | awk -F "\t" '{print $4}' | grep -v "-" | sort | uniq >> varEffect_trans
 #Rscript -e 'args=(commandArgs(TRUE));data1=read.delim(args[1]);data2=read.delim(args[2]);dataMerge=merge(data1,data2,by="Transcript_ID",all.x=T,all.y=F);'\
-'write.table(dataMerge,paste(args[2],"sel",sep="."), sep="\t", quote=F, row.names=F, col.names=T);' varEffect_trans TransInfo.txt
+#'write.table(dataMerge,paste(args[2],"sel",sep="."), sep="\t", quote=F, row.names=F, col.names=T);' varEffect_trans TransInfo.txt
 
+## create sample subset
+head -n1 assocTable > assocTable_sample
+grep ":10004" assocTable >> assocTable_sample
+head -n1 varEffect.txt.sel > varEffect.txt.sel_sample
+grep ":10004" varEffect.txt.sel >> varEffect.txt.sel_sample
+head -n1 VCF_info.sel > VCF_info.sel_sample
+grep ":10004" VCF_info.sel >> VCF_info.sel_sample
+head -n1 TransInfo.txt > TransInfo.txt_sample
+tail -n+2 varEffect.txt.sel_sample | awk '{print $4}' | grep -v "-" | grep -Fwf - TransInfo.txt >> TransInfo.txt_sample
+########################
+## check for mapping rate and proper mapping:
+module load SAMTools/0.1.19
+cd $workingdata
+for bam in {CF3,hod,newSeq,tollers}/bwa_align/bwa_*/pe_aligned_reads.sorted.bam;do echo $bam; samtools flagstat $bam; done > BAMstatistics.txt
+for bam in {newSeq2,stern}/bwa_align/singleSamples/bwa_*/pe_aligned_reads.sorted.bam;do echo $bam; samtools flagstat $bam; done >> BAMstatistics.txt
+grep "bwa_align" BAMstatistics.txt > samples.txt
+grep "mapped (" BAMstatistics.txt > mapped.txt       
+grep "properly paired" BAMstatistics.txt > paired.txt
+grep "different chr" BAMstatistics.txt | grep -v "mapQ"> otherChr.txt
+
+paste samples.txt mapped.txt paired.txt otherChr.txt > BAMstatistics_table.txt
 #########################
 ## explor the distribution per chromosome
 var="snps"
