@@ -711,7 +711,8 @@ for var in "snps";do
 'outputPDF=paste(args[1],"hist10000","pdf",sep=".");pdf(outputPDF);hist(data$V2,breaks=10000);dev.off();' $var.$chr.dist;
 done;done
 ###############################
-## varaiant annotation
+###############################
+## variant annotation
 for var in SNPs INDELs;do
  mkdir -p $varResults/${var}_ENS.varEffect && cd $varResults/${var}_ENS.varEffect;
  #qsub -v vcf="$varResults/GenotypeGVCFs_output_max50.raw_$var.vcf" ${script_path}/vep_merged.sh;
@@ -754,7 +755,7 @@ for annDB in "ENS" "NCBI";do #echo $annDB;done
  tail -n+2 indels/$annDB.varEffect.txt >> $annDB.varEffect.txt;
 done
 ##########################
-## breed specific varaints:
+## Prep files for GWAS:
 snps="GenotypeGVCFs_output_max50.pass_snps"  
 indels="GenotypeGVCFs_output_max50.pass_indels"
 
@@ -767,7 +768,7 @@ awk 'BEGIN{FS="\t";OFS="\t"}/#/{print;next}{if(length($4)>1){$4="U"};if(length($
 grep -v "^chrUn_" $breedSp/indels/$indels.monoAllel_edit.vcf > $breedSp/indels/$indels.NochrUn.vcf
 
 ## b) prepare Plink input & create binary inputs
-modu leloai vcftools/0.1.14
+module load vcftools/0.1.14
 module load plink/1.9
 for var in snps indels;do
  cd $breedSp/$var
@@ -779,7 +780,7 @@ for var in snps indels;do
  #plink --bfile ${!var}.NochrUn.binary --covar $breedSp/dog_breeds_all_rawCov --write-covar --dummy-coding --dog --out dog_breeds # dog_breeds_all_rawCov is created from dog_breeds_all where breeds id are replaced by binary representation
 done
 
-## b) "new" prepare Plink input & create binary inpuis & create file of alternative alleles
+## b) "new" prepare Plink input & create binary inputs & create file of alternative alleles
 cd $breedSp
 ## merge filtered SNPs and indels in the fake snp format
 module load vcftools/0.1.14
@@ -792,15 +793,17 @@ plink --file allSnp --allow-no-sex --dog --make-bed --out allSnp.binary
 ## create file of alternative alleles 
 cat allSnp.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{{if($3==".")$3=$1":"$2;}print $3,$5;}'  > alt_alleles
 
-## c) "new" prepare Plink input for protein coding variants only
-cd $breedSp
-for annDB in "ENS" "NCBI";do #echo $annDB;done
- tail -n+2 $annDB.varEffect.txt | grep -v "IMPACT=MODIFIER" | awk -F"[\t:]" 'BEGIN{OFS="\t"}{print "chr"$2,$3}' > $annDB.varEffect_coding.txt;
- vcftools --vcf allSnp.vcf --out allSnp_$annDB.coding --recode --positions $annDB.varEffect_coding.txt ## kept 194479
- vcftools --vcf allSnp_$annDB.coding.recode.vcf --plink --out allSnp_$annDB.coding
- plink --file allSnp_$annDB.coding --allow-no-sex --dog --make-bed --out allSnp_$annDB.coding.binary
- cat allSnp_$annDB.coding.recode.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{{if($3==".")$3=$1":"$2;}print $3,$5;}'  > alt_alleles_$annDB.coding
-done
+## b2) "new" prepare Plink input for protein coding variants only
+#cd $breedSp
+#for annDB in "ENS" "NCBI";do #echo $annDB;done
+# tail -n+2 $annDB.varEffect.txt | grep -v "IMPACT=MODIFIER" | awk -F"[\t:]" 'BEGIN{OFS="\t"}{print "chr"$2,$3}' > $annDB.varEffect_coding.txt;
+# vcftools --vcf allSnp.vcf --out allSnp_$annDB.coding --recode --positions $annDB.varEffect_coding.txt ## kept 194479
+# vcftools --vcf allSnp_$annDB.coding.recode.vcf --plink --out allSnp_$annDB.coding
+# plink --file allSnp_$annDB.coding --allow-no-sex --dog --make-bed --out allSnp_$annDB.coding.binary
+# cat allSnp_$annDB.coding.recode.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{{if($3==".")$3=$1":"$2;}print $3,$5;}'  > alt_alleles_$annDB.coding
+#done
+##########################
+## get representative variant per halotype
 
 ##########################
 ## PLINK statistics
@@ -918,11 +921,18 @@ for var in snps indels;do
 done
 
 ## "new" phenotype (or breed) specific analysis
+cd $breedSp
 qsub -v binary="allSnp.binary",pheno="Brachy",control="control",pheno_list="dog_breeds_brachy",geno="0.5",maf="0.01",ref="alt_alleles",species="dog",map="allSnp.map" $script_path/run_plink.sh
-qsub -v binary="allSnp_$annDB.coding.binary",pheno="Brachy",control="control_cod",pheno_list="dog_breeds_brachy",geno="0.5",maf="0.01",ref="alt_alleles_$annDB.coding",species="dog",map="allSnp.map" $script_path/run_plink.sh
+qsub -v binary="allSnp.binary",pheno="screwTail",control="control",pheno_list="dog_breeds_screwTail",geno="0.5",maf="0.05",ref="alt_alleles",species="dog",map="allSnp.map" $script_path/run_plink.sh ## change the name of the output folder of maf="0.01"
 
-qsub -v binary="allSnp.binary",pheno="screwTail",control="control",pheno_list="dog_breeds_screwTail",geno="0.5",maf="0.05",ref="alt_alleles",species="dog",map="allSnp.map" $script_path/run_plink.sh
-qsub -v binary="allSnp_$annDB.coding.binary",pheno="screwTail",control="control_cod",pheno_list="dog_breeds_screwTail",geno="0.5",maf="0.01",ref="alt_alleles_$annDB.coding",species="dog",map="allSnp.map" $script_path/run_plink.sh
+qsub -v binary="allSnp.binary",pheno="Toller",control="control",pheno_list="dog_breeds",geno="0.5",maf="0.01",ref="alt_alleles",species="dog",map="allSnp.map" $script_path/run_plink.sh
+
+
+## "new" phenotype (or breed) specific analysis for protein coding variants only
+#for annDB in NCBI;do echo $annDB;
+# qsub -v binary="allSnp_$annDB.coding.binary",pheno="Brachy",control="control_cod",pheno_list="dog_breeds_brachy",geno="0.5",maf="0.01",ref="alt_alleles_$annDB.coding",species="dog",map="allSnp.map" $script_path/run_plink.sh
+# qsub -v binary="allSnp_$annDB.coding.binary",pheno="screwTail",control="control_cod",pheno_list="dog_breeds_screwTail",geno="0.5",maf="0.01",ref="alt_alleles_$annDB.coding",species="dog",map="allSnp.map" $script_path/run_plink.sh
+#done
 
 ## "new" filter out the non-fixed alleles
 cd $breedSp
@@ -946,11 +956,13 @@ while read pheno control;do echo $pheno.vs.$control;
  ## qq plots
  qsub -v input=$assocFile.adjusted $script_path/qqPlot.sh
  ## manhattan
+ ## using unadjusted P values
  unad_cutoff_sug=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.05' | head -n1 | awk '{print $3}')
  unad_cutoff_conf=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.01' | head -n1 | awk '{print $3}')
  #qsub -v input=$assocFile,sug=$unad_cutoff_sug,conf=$unad_cutoff_conf $script_path/manhattan.sh
- qsub -v input=$assocFile,p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc_MAF0.05_unadj" $unad_cutoff_conf $script_path/manhattan_v2.sh
-  
+ qsub -v input=$assocFile,p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc_MAF0.05_unadj" $script_path/manhattan_v2.sh
+ 
+ ## using GC adjusted P values 
  unad_cutoff_sug=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.05' | head -n1 | awk '{print $4}')
  unad_cutoff_conf=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.01' | head -n1 | awk '{print $4}')
  qsub -v input=$assocFile.adjusted.loc,p_val="GC",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc_MAF0.05_GC" $script_path/manhattan_v2.sh
@@ -1051,7 +1063,7 @@ cd $breedSp
 echo -e "Location\tCHROM\tPOS\tID\tREF\tALT" > VCF_info
 cat allSnp.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{print substr($1,4)":"$2,$1,$2,$3,$4,$5}' >> VCF_info
 ## "New" prepare the variation effect file (VCF dependent): Done alreay
-## Extended Annotation (More temp work in extAnn.sh) (VCF independent): No change from old versio
+## Extended Annotation (More temp work in extAnn.sh) (VCF independent): No change from old version
 ## "New" marge all annotation info
 while read pheno control;do echo $pheno.vs.$control;
  cd $breedSp/$pheno.vs.$control
@@ -1065,7 +1077,9 @@ done < experiments.list
 
 
 ## sort annotated files
+cd $breedSp
 while read pheno control;do echo $pheno.vs.$control;
+ cd $breedSp/$pheno.vs.$control
  ann_assocTable="${pheno}.vs.${control}.complete.genoCor.fdrCor.${annDB}.ann"
  (head -n1 $ann_assocTable && tail -n+2 $ann_assocTable | sort -k9,9 -g ) > $ann_assocTable.sorted
  (head -n1 $ann_assocTable && tail -n+2 $ann_assocTable.sorted | grep -v "IMPACT=MODIFIER" | grep -vw "synonymous_variant")  > $ann_assocTable.sorted.coding
