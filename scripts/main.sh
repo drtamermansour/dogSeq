@@ -731,12 +731,6 @@ for annDB in "ENS" "NCBI";do #echo $annDB;done
  grep -v "^##" variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > $breedSp/snps/$annDB.varEffect.txt;
  ## indels: remove hashed lines, fix the header to be readable, and adjust the location coordinates
  cd $varResults/INDELs_$annDB.varEffect;
- #grep -v "^##" variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > tempVarEff.txt
- #tail -n+2 tempVarEff.txt | awk 'BEGIN{FS="\t";}{print $1;}' > tempVarEff2.txt; sed -i 's/^Un_/Un-/' tempVarEff2.txt;
- #echo "Location" > tempVarEff3.txt
- #awk 'BEGIN{FS="_";}{print $1":"$2-1;}' tempVarEff2.txt >> tempVarEff3.txt; sed -i 's/^Un-/Un_/' tempVarEff3.txt;
- #paste tempVarEff3.txt tempVarEff.txt | awk 'BEGIN{FS="\t";OFS="\t"}{print $2,$1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15;}' > $breedSp/indels/$annDB.varEffect.txt2
- #rm tempVarEff*.txt
  grep -v "^##" variant_effect_output.txt | sed 's/#Uploaded_variation/Uploaded_variation/' > tempVarEff.txt
  echo "Location" > tempVarEff2.txt;
  grep -v "^#" variant_effect_output.txt | awk 'BEGIN{FS="[\t:]";}{split($3,a,"-");if($4=="-"){print $2":"a[1]-1}else{print $2":"a[1]}}' >> tempVarEff2.txt;
@@ -760,25 +754,13 @@ snps="GenotypeGVCFs_output_max50.pass_snps"
 indels="GenotypeGVCFs_output_max50.pass_indels"
 
 ## a) prepare VCF files for analysis
+cd $varResults
 ## SNPs: remove chrUn from VCF 
 grep -v "^chrUn_" $snps.vcf > $breedSp/snps/$snps.NochrUn.vcf
-## INDELS: select monoalleleic indels, replace with uniq character,and remove chrUn from VCF 
+## INDELS: select bi-alleleic indels, replace with ACTG character,and remove chrUn from VCF 
 awk '/#/{print;next}{if($5 !~ /,/){print}}' $indels.vcf > $breedSp/indels/$indels.monoAllel.vcf ##filtered 1145936 multialleleic indels
-awk 'BEGIN{FS="\t";OFS="\t"}/#/{print;next}{if(length($4)>1){$4="U"};if(length($5)>1){$5="U"};print;}' $breedSp/indels/$indels.monoAllel.vcf > $breedSp/indels/$indels.monoAllel_edit.vcf
+awk 'BEGIN{FS="\t";OFS="\t"}/#/{print;next}{if(length($4)>1){$5!="A"?$4="A":$4="T";};if(length($5)>1){$4!="A"?$5="A":$5="T";};print;}' $breedSp/indels/$indels.monoAllel.vcf > $breedSp/indels/$indels.monoAllel_edit.vcf
 grep -v "^chrUn_" $breedSp/indels/$indels.monoAllel_edit.vcf > $breedSp/indels/$indels.NochrUn.vcf
-
-## b) prepare Plink input & create binary inputs
-module load vcftools/0.1.14
-module load plink/1.9
-for var in snps indels;do
- cd $breedSp/$var
- ## prepare Plink input
- vcftools --vcf ${!var}.NochrUn.vcf --plink --out ${!var}.NochrUn
- ## create binary inpuis
- plink --file ${!var}.NochrUn --allow-no-sex --dog --make-bed --out ${!var}.NochrUn.binary
- ### create covariant file "it is the same for both snps and indels but I am creating 2 for simplicity"
- #plink --bfile ${!var}.NochrUn.binary --covar $breedSp/dog_breeds_all_rawCov --write-covar --dummy-coding --dog --out dog_breeds # dog_breeds_all_rawCov is created from dog_breeds_all where breeds id are replaced by binary representation
-done
 
 ## b) "new" prepare Plink input & create binary inputs & create file of alternative alleles
 cd $breedSp
@@ -802,131 +784,165 @@ cat allSnp.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{{if($3==".")$3=$1":"$2;
 # plink --file allSnp_$annDB.coding --allow-no-sex --dog --make-bed --out allSnp_$annDB.coding.binary
 # cat allSnp_$annDB.coding.recode.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{{if($3==".")$3=$1":"$2;}print $3,$5;}'  > alt_alleles_$annDB.coding
 #done
-##########################
-## get representative variant per halotype
 
+## c) "new" get representative variant per haplotype (pruning)
+## Variants are pruned based on the variance inflation factor (VIF), which recursively removes SNPs within a sliding window of 50 SNPs and 5 SNPs is used to shift the window at each step with VIF threathold equals 2 (The parameters for --indep). To read more about VIF: https://en.wikipedia.org/wiki/Variance_inflation_factor
+plink --bfile allSnp.binary --dog --maf 0.05 --geno 0.05 --keep dog_breeds_eff --indep 50 5 2 
+#plink --bfile allSnp.binary --dog --keep dog_breeds_eff --extract plink.prune.in --recode vcf-iid --out pruned_allSnp ## to generate VCF
+plink --bfile allSnp.binary --dog --keep dog_breeds_eff --extract plink.prune.in --out pruned_allSnp --recode
+plink --file pruned_allSnp --allow-no-sex --dog --make-bed --out pruned_allSnp.binary
+
+## extra c) pruning but keep the 6 trios
+plink --bfile allSnp.binary --dog --maf 0.05 --geno 0.05 --indep 50 5 2 --out plink_KeepTrios
+plink --bfile allSnp.binary --dog --extract plink_KeepTrios.prune.in --out pruned_allSnp_KeepTrios --recode
+plink --file pruned_allSnp_KeepTrios --allow-no-sex --dog --make-bed --out pruned_allSnp_KeepTrios.binary
 ##########################
 ## PLINK statistics
-module load plink/1.9
-var="snps";path="$breedSp/$var";binary="GenotypeGVCFs_output_max50.pass_$var.NochrUn.binary";
-control="ALL";breed="Boxer";breed_list="dog_breeds";
-cd $path/$breed.vs.$control
+## ... see the old version in main_old.sh
 
-#### Temp code #####
-## identity-by-missingness (IBM) clustering
-plink --bfile $path/$binary --cluster missing --dog --out "IBM" --make-pheno $path/../$breed_list $breed --allow-no-sex
-## population stratification: identity-by-state (IBS) clustering
-plink --bfile $path/$binary --cluster --dog --out "IBS" --make-pheno $path/../$breed_list $breed --allow-no-sex
-## prepare a pruned list of SNPs for IBD and Inbreeding coefficients analysis
-plink --bfile $path/$binary --indep 50 5 2 --dog --out "pruned"
-## Pairwise IBD estimation
-## identity-by-state (IBS) is useful for detecting pairs of individuals who look more different from each other than you'd expect in a random, homogeneous sample.
-## identity-by-descent (IBD) find pairs of individuals who look too similar to eachother, i.e. more than we would expect by chance in a random sample.
-plink --bfile $path/$binary --genome --dog --out "IBD" --cluster
-plink --bfile $path/$binary --genome --dog --out "IBD_pruned" --cluster --extract pruned.prune.in
-## Inbreeding coefficients
-plink --bfile $path/$binary --het --dog --out "InbreedCo"
-plink --bfile $path/$binary --het --dog --out "InbreedCo_pruned" --extract pruned.prune.in
-#### End of Temp code ####
+## IBS similarity matrix (typocally used for population stratification): distances are expressed in "shared allele counts", "proportions of alleles IBS", "1 minus the identity-by-state value" 
+plink --bfile pruned_allSnp_KeepTrios.binary --distance square allele-ct ibs 1-ibs --dog --allow-no-sex --out "distance"
+## R (using the 1 minus the identity-by-state value distances)
+library(ape)
+mdist_id=read.table("distance.myIDs")
+mdist=read.table("distance.mdist", fill=T, col.names=mdist_id$V4)
+mdist2=as.dist(mdist)
+hc = hclust(mdist2)
+# vector of colors
+#mypal = c("#556270", "#4ECDC4", "#1B676B", "#FF6B6B", "#C44D58")
+mypal = c("red", "blue", "green", "gold", "black", "blueviolet","coral4","cadetblue", "darkred", "darkslategray", "darkorange3", "firebrick")
+# cutting dendrogram in 5 clusters
+clus = cutree(hc, 12)
+# plot
+plot(as.phylo(hc), type = "fan", cex = 0.6, font=2, use.edge.length = TRUE, tip.color = mypal[clus])
 
-## Pairwise IBD estimation with breed specific pruned SNPs
-mkdir $varResults/breedSp/IBD && cd $varResults/breedSp/IBD
-for breed in Pug Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do
+##### Temp
+## IBD estimation with all individuals pruned SNPs
+plink --bfile pruned_allSnp_KeepTrios.binary --genome --dog --allow-no-sex --out "genome"
+tail -n+2 genome.genome | awk '{if($10!=0)print $0;}'
+#awk '{print $1,$3,1-$10}' genome.genome > genome.genome_dist
+## Inbreeding coefficients (F) estimation with all individuals pruned SNPs
+plink --bfile pruned_allSnp_KeepTrios.binary --dog --allow-no-sex --het --out "InC";
+
+## IBD estimation with all individuals pruned SNPs after removal of trios
+plink --bfile pruned_allSnp.binary --genome --dog --allow-no-sex --out "genome2"
+tail -n+2 genome2.genome | awk '{if($10!=0)print $0;}'
+#awk '{print $1,$3,1-$10}' genome2.genome > genome2.genome_dist
+## Inbreeding coefficients (F) estimation with all individuals pruned SNPs after removal of trios
+plink --bfile pruned_allSnp.binary --dog --allow-no-sex --het --out "InC2";
+
+## Pairwise IBD and individual Inbreeding coefficients (F) estimation with breed specific pruned SNPs
+mkdir $varResults/breedSp/IBD && cd $varResults/breedSp
+while read breed;do
  echo $breed;
- plink --bfile $path/$binary --indep 50 5 2 --dog --out "$breed.pruned" --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
- plink --bfile $path/$binary --genome --dog --out "$breed" --extract $breed.pruned.prune.in --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
-done
-rm *.nosex
-grep "Pruning complete" *.pruned.log > Pruning.txt
-head -n1 Boxer.genome > genome.txt
-for f in *.genome;do tail -n+2 $f >> genome.txt;done
+ grep -w $breed dog_breeds_eff > keepIt; 
+ ## pruning
+ plink --bfile allSnp.binary --dog --maf 0.05 --geno 0.05 --keep keepIt --indep 50 5 2 --out "IBD/$breed";
+ ## IBD
+ plink --bfile allSnp.binary --dog --allow-no-sex --extract IBD/$breed.prune.in --keep keepIt --genome --out "IBD/$breed.gen";
+ ### F
+ plink --bfile allSnp.binary --dog --allow-no-sex --extract IBD/$breed.prune.in --keep keepIt --het --out "IBD/$breed.InC";
+done < <(cat dog_breeds_eff | awk '{A[$NF]++}END{for(i in A)print i,A[i]}' | awk '{if($2>1)print $1;}')
+rm IBD/*.nosex
+grep "Pruning complete" IBD/*.log > breedSp_Pruning.txt
+grep "non-autosomes" IBD/*.log > breedSp_Pruning2.txt
+head -n1 IBD/Boxer.gen.genome > breedSp_genome.txt
+for f in IBD/*.gen.genome;do tail -n+2 $f >> breedSp_genome.txt;done
+tail -n+2 breedSp_genome.txt | awk '{if($10!=0)print $0;}' 
+grep "^--het" IBD/*.log > het_scan.txt
+head -n1 IBD/Boxer.InC.het > breedSp_het.txt
+for f in IBD/*.InC.het;do tail -n+2 $f >> breedSp_het.txt;done
+#################
 
-## Inbreeding coefficients with breed specific pruned SNPs
-mkdir $breedSp/InbreedCo && cd $breedSp/InbreedCo
-for breed in Pug Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do
- echo $breed;
- ## SNPs are pruned in each breed based on the variance inflation factor (VIF), which recursively removes SNPs within a sliding window of 50 SNPs and 5 SNPs is used to shift the window at each step with VIF threathold equals 2 (The parameters for --indep)
- plink --bfile $path/$binary --indep 50 5 2 --dog --out "$breed.pruned" --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
- plink --bfile $path/$binary --het --dog --out "$breed" --extract $breed.pruned.prune.in --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
-done
-rm *.nosex
-grep "^--het" *.log > het_scan.txt
-head -n1 Boxer.het > het.txt
-for f in *.het;do tail -n+2 $f >> het.txt;done
+## IBD estimation with all SNPs (just cleaned by geno and maf) 
+plink --bfile allSnp.binary --maf 0.05 --geno 0.05 --recode --allow-no-sex --dog --make-bed --out "cleanSet"
+plink --bfile cleanSet --genome --dog --allow-no-sex --out "cleanRandomIBD"
+awk '{print $1,$3,1-$10}' cleanRandomIBD.genome > cleanRandomIBD.genome_dist
+tail -n+2 cleanRandomIBD.genome | awk '{if($10!=0)print $0;}'
+## R
+library(reshape)
+IBD=read.table("cleanRandomIBD.genome",header=T)
+# calculate the distance as 1 - PI_HAT
+IBD$PI_HAT_dist=1-IBD$PI_HAT
+# pivot the table
+IBD_distTable=cast(IBD, FID2 ~ FID1,value="PI_HAT_dist")
+# add a column with NAs at the end (will be removed by the as.dist function)
+IBD_distTable$chloe=NA
+# move the chloe to the end (to make all values in the lower triangle)
+IBD_distTable_temp=IBD_distTable[IBD_distTable$FID2!="chloe",]
+IBD_distTable_temp2=IBD_distTable[IBD_distTable$FID2=="chloe",]
+IBD_distTable_temp3=rbind(IBD_distTable_temp,IBD_distTable_temp2)
+# add a row wiyj NAs at the top (will be removed by the as.dist function)
+IBD_distTable_new=rbind(NA,IBD_distTable_temp3)
+# make the table as a simple data frame (the pivoting step has changed the class of it in a wired way)
+IBD_distTable_new2=as.data.frame(IBD_distTable_new)
+# remove the FID2 column
+IBD_distTable_final <- IBD_distTable_new2[,-1]
+rownames(IBD_distTable_final) <- colnames(IBD_distTable_final)#IBD_distTable_new2[,1]
+IBD_dist=as.dist(IBD_distTable_final)
+IBD_hc = hclust(IBD_dist)
+bitmap("PI_HAT_dist.bmp", width=20, height=10);
+plot(IBD_hc, hang = -1)
+graphics.off();
 
-mkdir $breedSp/InbreedCo_unpruned && cd $breedSp/InbreedCo_unpruned  ## to see how using unpruned SNPs would affect the results
-for breed in Pug Bulldog_English Newfoundland Rottweiler Toller Boxer labrador_retriever weimaraner Golden_Retriever Whippet;do
- echo $breed;
- plink --bfile $path/$binary --het --dog --out "$breed" --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
-done
-rm *.nosex
-grep "^--het" *.log > het_scan.txt
-head -n1 Boxer.het > het.txt
-for f in *.het;do tail -n+2 $f >> het.txt;done
+dat=IBD_distTable_final
+L=dim(dat)[1]
+rem=c()
+# check 1st column
+c=min(dat[which(!is.na(dat[,1])),1])
+if(c==1){rem=c(1)}
+# from 2nd to before last, check both row and column
+for (x in 2:(L-1)){
+r=min(dat[x,which(!is.na(dat[x,]))])
+c=min(dat[which(!is.na(dat[,x])),x])
+z=min(c(r,c))
+if(z==1){rem=c(rem,x)}
+}
+# check last row
+r=min(dat[L,which(!is.na(dat[L,]))])
+if(r==1){rem=c(rem,L)}
+newdat=dat[-rem,-rem]
+IBD_dist=as.dist(newdat)
+IBD_hc = hclust(IBD_dist)
+bitmap("PI_HAT_dist_limited.bmp", width=20, height=10);
+plot(IBD_hc, hang = -1)
+graphics.off();
 
-mkdir $breedSp/InbreedCo_relat && cd $breedSp/InbreedCo_relat ## to see the effect of presence of known offsprings 
-breed_list="dog_breeds_all"
-for breed in Boxer labrador_retriever;do
- echo $breed;
- plink --bfile $path/$binary --indep 50 5 2 --dog --out "$breed.pruned" --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
- plink --bfile $path/$binary --het --dog --out "$breed" --extract $breed.pruned.prune.in --make-pheno ../$breed_list $breed --allow-no-sex --filter-cases
-done
-rm *.nosex
-grep "^--het" *.log > het_scan.txt
-head -n1 Boxer.het > het.txt
-for f in *.het;do tail -n+2 $f >> het.txt;done
+breed_IDs=read.table("distance.myIDs")
+breed_IDs=breed_IDs[,c(2,4)];colnames(breed_IDs)=c("ID","Breed");
+IBD_distTable_breed=IBD_distTable_final
+colnames(IBD_distTable_breed) <- breed_IDs$Breed
+rownames(IBD_distTable_breed) <- breed_IDs$Breed
+IBD_dist2=as.dist(IBD_distTable_breed)
+IBD_hc2 = hclust(IBD_dist2)
+bitmap("PI_HAT_dist2.bmp", width=20, height=10);
+plot(IBD_hc2, hang = -1)
+graphics.off();
+
+## Inbreeding coefficients (F) estimation with all SNPs (just cleaned by geno and maf) 
+plink --bfile cleanSet --dog --allow-no-sex --het --out "cleanRandomInC";
+## R
+library(ggplot2)
+setwd("/Users/drtamermansour/MEGA/breedSp/Quality assurance/")
+data=read.delim(file="InbreedCo_forR.txt")
+ggplot(data, aes(x=Breed,y=InbreedCo)) + geom_point(size=2) + theme(axis.text.x = element_text(angle = 30, hjust = 1))
 #########################
-## prepare the VCF_info tables (VCF dependent) : required for running the breedSp_plink.sh script and for subsequent annotation
+## prepare the VCF_info tables (VCF dependent) : required for running the breedSp_plink.sh script (the old analysis) and for subsequent annotation
 for var in snps indels;do
  cd $breedSp/$var
  echo -e "Location\tCHROM\tPOS\tID\tREF\tALT" > VCF_info
  grep -v "^chrUn_" $varResults/${!var}.vcf | awk 'BEGIN{FS="\t";OFS="\t";}/#/{next;}{print substr($1,4)":"$2,$1,$2,$3,$4,$5}' >> VCF_info
 done
 
-## start the breed specific analysis
-for var in snps indels;do
- path="$breedSp/$var";
- binary="GenotypeGVCFs_output_max50.pass_$var.NochrUn.binary" 
- qsub -v path="$path",binary="$binary",breed="Whippet",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="Bulldog_English",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="Newfoundland",control="ALL",breed_list="dog_breeds_Newfoundland" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="Rottweiler",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="Toller",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="Boxer",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="labrador_retriever",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="weimaraner",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="Golden_Retriever",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="Pug",control="ALL",breed_list="dog_breeds" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="Brachy",control="ALL",breed_list="dog_breeds_brachy" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="Hunting",control="ALL",breed_list="dog_breeds_hunt" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="Smart",control="ALL",breed_list="dog_breeds_smart" $script_path/breedSp_plink.sh
- ## coat colors
- qsub -v path="$path",binary="$binary",breed="Red",control="ALL",breed_list="dog_breeds_Red" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="maskFixed",control="ALL",breed_list="dog_breeds_maskFixed" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="maskReport",control="ALL",breed_list="dog_breeds_maskReport" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="Grizzle",control="ALL",breed_list="dog_breeds_Grizzle" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="brindle",control="ALL",breed_list="dog_breeds_brindle" $script_path/breedSp_plink.sh
-
- qsub -v path="$path",binary="$binary",breed="tick",control="ALL",breed_list="dog_breeds_tick" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="tan",control="ALL",breed_list="dog_breeds_tan" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="brown",control="ALL",breed_list="dog_breeds_brown" $script_path/breedSp_plink.sh
-
- qsub -v path="$path",binary="$binary",breed="HOD",control="ALL",breed_list="dog_breeds_HOD" $script_path/breedSp_plink.sh
- qsub -v path="$path",binary="$binary",breed="CED",control="ALL",breed_list="dog_breeds_CED" $script_path/breedSp_plink.sh
-
- qsub -v path="$path",binary="$binary",breed="screwTail",control="ALL",breed_list="dog_breeds_screwTail" $script_path/breedSp_plink.sh
-
- #qsub -v path="$path",binary="$binary",breed="Golden_Retriever",control="labrador_retriever",breed_list="dog_breeds_Labs_golden" $script_path/breedSp_plink.sh
- #qsub -v path="$path",binary="$binary",breed="Golden_Retriever",control="Boxer",breed_list="dog_breeds_Boxer_golden" $script_path/breedSp_plink.sh
-done
-
 ## "new" phenotype (or breed) specific analysis
 cd $breedSp
-qsub -v binary="allSnp.binary",pheno="Brachy",control="control",pheno_list="dog_breeds_brachy",geno="0.5",maf="0.01",ref="alt_alleles",species="dog",map="allSnp.map" $script_path/run_plink.sh
+qsub -v label="allSnp",pruned="pruned_allSnp",pheno="screwTail",control="control",pheno_list="dog_breeds_screwTail",geno="0.1",maf="0.01",ref="alt_alleles",species="dog" $script_path/run_plink.sh
+echo "screwTail control 0.1 0.01 allSnp" >> experiments.list
+
+qsub -v label="allSnp.binary",pheno="Brachy",control="control",pheno_list="dog_breeds_brachy",geno="0.5",maf="0.01",ref="alt_alleles",species="dog",map="allSnp.map" $script_path/run_plink.sh
 qsub -v binary="allSnp.binary",pheno="screwTail",control="control",pheno_list="dog_breeds_screwTail",geno="0.5",maf="0.05",ref="alt_alleles",species="dog",map="allSnp.map" $script_path/run_plink.sh ## change the name of the output folder of maf="0.01"
 
 qsub -v binary="allSnp.binary",pheno="Toller",control="control",pheno_list="dog_breeds",geno="0.5",maf="0.01",ref="alt_alleles",species="dog",map="allSnp.map" $script_path/run_plink.sh
-
 
 ## "new" phenotype (or breed) specific analysis for protein coding variants only
 #for annDB in NCBI;do echo $annDB;
@@ -936,9 +952,12 @@ qsub -v binary="allSnp.binary",pheno="Toller",control="control",pheno_list="dog_
 
 ## "new" filter out the non-fixed alleles
 cd $breedSp
-for z in {1..39};do echo $z:1 1 1 1 1 1 fake.$z $z 1;done > fake_set
-while read pheno control;do echo $pheno.vs.$control;
- cd $breedSp/$pheno.vs.$control;assocAdjFile=$pheno.vs.$control.asc.assoc.adjusted.loc; completeFile=$pheno.vs.$control.complete.genoCor.fdrCor;
+#for z in {1..39};do echo $z:1 1 1 1 1 1 fake.$z $z 1;done > fake_set
+#for z in {1..39};do for x in {1..30000000..100000};do echo $z:$x 1 1 1 1 1 fake.$z.$x $z $x;done;done > fake_set
+grep -v "chrUn_" $genome_dir/canFam3.chrom.sizes | grep -v "chrM" | sed 's/^chr//' | sed 's/X/39/' > chrom.sizes
+while read z len;do for ((x=0; x<=len; x=x+100000));do echo $z:$x 1 1 1 1 1 fake.$z.$x $z $x;done;done > fake_set < chrom.sizes 
+while read pheno control geno maf label;do echo $pheno.vs.$control;
+ cd $breedSp/$pheno.vs.$control.geno_$geno.maf_$maf.$label;assocAdjFile=$pheno.vs.$control.asc.assoc.adjusted.loc; completeFile=$pheno.vs.$control.complete.genoCor.fdrCor;
  (head -n1 $completeFile && awk 'BEGIN{IFS=OFS="\t"}{if(($2-$3)>0.9 || ($3-$2)>0.9)print;}' $completeFile) > $completeFile.fixed
  awk '{print $1}' $completeFile.fixed | grep -Fwf - $assocAdjFile > $assocAdjFile.sel
  cat $assocAdjFile.sel $breedSp/fake_set > $assocAdjFile.sel2
@@ -949,24 +968,26 @@ module load R/3.0.1
 Rscript -e "install.packages('qqman', lib='~/R/v3.0.1/library', contriburl=contrib.url('http://cran.r-project.org/'))"
 
 cd $breedSp
-while read pheno control;do echo $pheno.vs.$control;
- cd $breedSp/$pheno.vs.$control
+while read pheno control geno maf label;do echo $pheno.vs.$control;
+ cd $breedSp/$pheno.vs.$control.geno_$geno.maf_$maf.$label
  #### Association
  assocFile=$pheno.vs.$control.asc.assoc
+ assocPruned=$pheno.vs.$control.pruned.asc.assoc
  ## qq plots
  qsub -v input=$assocFile.adjusted $script_path/qqPlot.sh
  ## manhattan
  ## using unadjusted P values
- unad_cutoff_sug=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.05' | head -n1 | awk '{print $3}')
- unad_cutoff_conf=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.01' | head -n1 | awk '{print $3}')
+ unad_cutoff_sug=$(tail -n+2 $assocPruned.adjusted | awk '$6>=0.05' | head -n1 | awk '{print $3}')
+ unad_cutoff_conf=$(tail -n+2 $assocPruned.adjusted | awk '$6>=0.01' | head -n1 | awk '{print $3}')
  #qsub -v input=$assocFile,sug=$unad_cutoff_sug,conf=$unad_cutoff_conf $script_path/manhattan.sh
- qsub -v input=$assocFile,p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc_MAF0.05_unadj" $script_path/manhattan_v2.sh
- 
+ qsub -v input=$assocFile,p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc.geno_$geno.MAF_$maf.unadj" $script_path/manhattan_v2.sh
+ qsub -v input=$assocFile.adjusted.loc.sel2,p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc.geno_$geno.MAF_$maf.unadj_fixed" $script_path/manhattan_v2.sh
+
  ## using GC adjusted P values 
- unad_cutoff_sug=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.05' | head -n1 | awk '{print $4}')
- unad_cutoff_conf=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.01' | head -n1 | awk '{print $4}')
- qsub -v input=$assocFile.adjusted.loc,p_val="GC",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc_MAF0.05_GC" $script_path/manhattan_v2.sh
- qsub -v input=$assocFile.adjusted.loc.sel2,p_val="GC",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc_MAF0.05_GC_fixed" $script_path/manhattan_v2.sh
+ #unad_cutoff_sug=$(tail -n+2 $assocPruned.adjusted | awk '$6>=0.05' | head -n1 | awk '{print $4}')
+ #unad_cutoff_conf=$(tail -n+2 $assocPruned.adjusted | awk '$6>=0.01' | head -n1 | awk '{print $4}')
+ #qsub -v input=$assocFile.adjusted.loc,p_val="GC",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc.geno_$geno.MAF_$maf.GC" $script_path/manhattan_v2.sh
+ #qsub -v input=$assocFile.adjusted.loc.sel2,p_val="GC",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Asc.geno_$geno.MAF_$maf.GC_fixed" $script_path/manhattan_v2.sh
 
  #### Missingness
  missingnessFile=$pheno.vs.$control.mis.missing
@@ -976,34 +997,37 @@ while read pheno control;do echo $pheno.vs.$control;
  unad_cutoff_sug=$(tail -n+2 $missingnessFile.adjusted | awk '$9>=0.05' | head -n1 | awk '{print $3}')
  unad_cutoff_conf=$(tail -n+2 $missingnessFile.adjusted | awk '$9>=0.01' | head -n1 | awk '{print $3}')
  #qsub -v input=$missingnessFile.adjusted.loc,sug=$unad_cutoff_sug,conf=$unad_cutoff_conf $script_path/manhattan.sh
- qsub -v input=$missingnessFile.adjusted.loc,p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Mis_unadj" $script_path/manhattan_v2.sh
+ qsub -v input=$missingnessFile.adjusted.loc,p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Mis_unadj_FDR" $script_path/manhattan_v2.sh
+ unad_cutoff_sug=$(tail -n+2 $missingnessFile.adjusted | awk '$5>=0.05' | head -n1 | awk '{print $3}')
+ unad_cutoff_conf=$(tail -n+2 $missingnessFile.adjusted | awk '$5>=0.01' | head -n1 | awk '{print $3}')
+ qsub -v input=$missingnessFile.adjusted.loc,p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,output="${pheno}_Mis_unadj_Bonf" $script_path/manhattan_v2.sh
 done < experiments.list
 cd $breedSp
 rsync -a --prune-empty-dirs --include '*/' --include '*.bmp' --exclude '*' . ~/temp/.
 
 ## visualization of single chromosomes ## make a file "peakChr.list" with the no of target chromosomes in the folder of the target analysis 
 cd $breedSp
-while read pheno control;do echo $pheno.vs.$control;
- cd $breedSp/$pheno.vs.$control
+while read pheno control geno maf label;do echo $pheno.vs.$control;
+ cd $breedSp/$pheno.vs.$control.geno_$geno.maf_$maf.$label
  #### Association
  assocFile=$pheno.vs.$control.asc.assoc
  ## manhattan
- unad_cutoff_sug=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.05' | head -n1 | awk '{print $4}')
- unad_cutoff_conf=$(tail -n+2 $assocFile.adjusted | awk '$10>=0.01' | head -n1 | awk '{print $4}')
- qsub -v input=$assocFile.adjusted.loc,peakChr="peakChr.list",p_val="GC",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="asc" $script_path/manhattan_chr.sh;
- qsub -v input=$assocFile.adjusted.loc.sel2,peakChr="peakChr.list",p_val="GC",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="asc.fixed" $script_path/manhattan_chr.sh;
+ unad_cutoff_sug=$(tail -n+2 $assocPruned.adjusted | awk '$6>=0.05' | head -n1 | awk '{print $3}')
+ unad_cutoff_conf=$(tail -n+2 $assocPruned.adjusted | awk '$6>=0.01' | head -n1 | awk '{print $3}')
+ qsub -v input=$assocFile.adjusted.loc,peakChr="peakChr.Asc",p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="asc" $script_path/manhattan_chr.sh;
+ qsub -v input=$assocFile.adjusted.loc.sel2,peakChr="peakChr.Asc",p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="asc.fixed" $script_path/manhattan_chr.sh;
 
  #### Missingness
  missingnessFile=$pheno.vs.$control.mis.missing
- unad_cutoff_sug=$(tail -n+2 $missingnessFile.adjusted | awk '$9>=0.05' | head -n1 | awk '{print $3}')
- unad_cutoff_conf=$(tail -n+2 $missingnessFile.adjusted | awk '$9>=0.01' | head -n1 | awk '{print $3}')
- qsub -v input=$missingnessFile.adjusted.loc,peakChr="peakChr.list",p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="mis" $script_path/manhattan_chr.sh
+ unad_cutoff_sug=$(tail -n+2 $missingnessFile.adjusted | awk '$5>=0.05' | head -n1 | awk '{print $3}')
+ unad_cutoff_conf=$(tail -n+2 $missingnessFile.adjusted | awk '$5>=0.01' | head -n1 | awk '{print $3}')
+ qsub -v input=$missingnessFile.adjusted.loc,peakChr="peakChr.Mis",p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="mis" $script_path/manhattan_chr.sh
 done < experiments.list
 
 ## visualization of regions in single chromosomes ## make a file "peakChr2.list" with the no of target chromosomes in the folder of the target analysis 
 cd $breedSp
-while read pheno control;do echo $pheno.vs.$control;
- cd $breedSp/$pheno.vs.$control
+while read pheno control geno maf label;do echo $pheno.vs.$control;
+ cd $breedSp/$pheno.vs.$control.geno_$geno.maf_$maf.$label
  #### Association
  assocFile=$pheno.vs.$control.asc.assoc
  ## manhattan
@@ -1019,6 +1043,23 @@ while read pheno control;do echo $pheno.vs.$control;
  qsub -v input=$missingnessFile.adjusted.loc,peakChr="peakChr2.list",p_val="P",sug=$unad_cutoff_sug,conf=$unad_cutoff_conf,suffix="mis.reg" $script_path/manhattan_Region.sh
 done < experiments.list
 
+#####
+## overlay QQ-plot
+cd $breedSp
+while read pheno control geno maf label;do echo $pheno.vs.$control;
+ cd $breedSp/$pheno.vs.$control.geno_$geno.maf_$maf.$label
+ input=$pheno.vs.$control.asc.assoc.adjusted.loc
+ Rscript -e 'args=(commandArgs(TRUE));source("/mnt/scratch/mansourt/Tamer/dogSeq/scripts/qqunif.plot.R");'\
+'data=read.table(args[1], header=TRUE); data=data[!is.na(data$P),];'\
+'my.pvalue.list<-list("Unadj"=data[[args[3]]], "GC"=data[[args[4]]], "BONF"=data[[args[5]]]);'\
+'bitmap(paste(args[2],"bmp",sep="."), width=20, height=10);'\
+'qqunif.plot(my.pvalue.list, auto.key=list(corner=c(.95,.05)), xlim=c(-0.2,8), aspect=1); graphics.off();' $input "QQPlot" "P" "GC" "BONF"
+#'qqunif.plot(data[[args[3]]], xlim=c(-0.2,6), aspect=1); graphics.off();' "screwTail.vs.control.asc.assoc.adjusted.loc.sel" "test" "P" "GC"
+done < experiments.list
+#####
+## MAF curve plot
+head -n1 screwTail.vs.control.asc.assoc | awk '{print $1,$3,$5,$6}' > chr5_maf2
+tail -n+2 screwTail.vs.control.asc.assoc | awk '{if($6<0.5){print $1,$3,$5,$6;}else{print $1,$3,1-$5,1-$6;}}' | grep "^5" >> chr5_maf2
 ##########################
 ## Annotation
 ## prepare the VCF_info tables (VCF dependent): Done alreay
@@ -1651,6 +1692,18 @@ for sample in S1_2202 S2_T582 R1_T586 R2_1052 R3_5809 R4_5813;do
  samtools index $sample.$region.bam
 done
 cp *.$region.bam* ~/temp/.   
+
+
+##
+## coding variants in labradors 
+cd $breedSp
+annDB="NCBI"
+tail -n+2 $annDB.varEffect.txt | grep -v "IMPACT=MODIFIER" | awk -F"[\t:]" 'BEGIN{OFS="\t"}{print "chr"$2,$3}' > $annDB.varEffect_coding.txt; ## I should sort | uniq
+module load vcftools/0.1.14
+vcftools --gzvcf ../GenotypeGVCFs_output_max50.vcf.gz --out Labradors_$annDB.coding --recode --positions $annDB.varEffect_coding.txt --indv BD480 --indv BD411 --indv BD474 --indv BD435 --indv BD479 --indv BD412 --indv BD473 --indv BD465 --indv BD514 --indv BD401
+vcftools --vcf Labradors_NCBI.coding.recode.vcf --out Labradors_NCBI.coding.effective --recode --maf 0.000001
+module load tabix/0.2.6
+bgzip Labradors_NCBI.coding.effective.recode.vcf
 
 
 ###

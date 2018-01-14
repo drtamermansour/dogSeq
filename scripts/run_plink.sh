@@ -4,18 +4,18 @@
 #PBS -m abe                     #send email to myself
 #PBS -N phenoSp          #give name to the job
 
-#path="/mnt/ls15/scratch/users/mansourt/Tamer/speciesSeq/varResults/phenoSp/snps"
-#binary="GenotypeGVCFs_output_max50.pass_snps.NochrUn.binary"
-#pheno="Golden_Retriever"
-#control="ALL"
-#pheno_list="species_phenos"
-
 cd $PBS_O_WORKDIR
 
 module load plink/1.9
 
-## binary="allSnp.binary";pheno="Brachy";control="control";pheno_list="dog_breeds_brachy";geno="0.5";maf="0.01";ref="alt_alleles";species="dog";map="allSnp.map";
-mkdir -p $pheno.vs.$control;output=$pheno.vs.$control/$pheno.vs.$control
+## label="allSnp";pheno="Brachy";control="control";pheno_list="dog_breeds_brachy";geno="0.5";maf="0.01";ref="alt_alleles";species="dog";
+binary=$label.binary
+map=$label.map
+output_dir=$pheno.vs.$control.geno_$geno.maf_$maf.$label
+mkdir -p $output_dir;output=$output_dir/$pheno.vs.$control
+
+## perform assocaition analysis for pruned dataset
+plink --bfile $pruned.binary --make-pheno $pheno_list $pheno --assoc --geno $geno --maf $maf --reference-allele $ref --allow-no-sex --adjust gc qq-plot --$species --out $output.pruned.asc
 
 ## perform missingness test
 #plink  --bfile $binary --make-pheno $pheno_list $pheno --test-missing --allow-no-sex --$species --out $output.mis

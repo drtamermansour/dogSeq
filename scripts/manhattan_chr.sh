@@ -11,7 +11,7 @@ Rscript -e 'args=(commandArgs(TRUE));library(qqman, lib.loc = "/mnt/home/mansour
 'data=read.table(args[1], header=TRUE); data=data[!is.na(data$P),];'\
 'chr=read.table(args[2]);'\
 'for(i in chr$V1){'\
-'bitmap(paste(args[6],i,"bmp",sep="."), width=20, height=10); manhattan(subset(data, CHR == i), p = args[3], suggestiveline = -log(as.numeric(args[4]),10), genomewideline = -log(as.numeric(args[5]),10), annotatePval=args[4], annotateTop=TRUE);graphics.off();}' $input $peakChr $p_val $sug $conf $suffix
+'bitmap(paste(args[6],i,"bmp",sep="."), width=20, height=10); manhattan(subset(data, CHR == i), p = args[3], suggestiveline = -log(as.numeric(args[4]),10), genomewideline = -log(as.numeric(args[5]),10), annotateTop=TRUE);graphics.off();}' $input $peakChr $p_val $sug $conf $suffix
 
 qstat -f ${PBS_JOBID}
 
